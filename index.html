@@ -385,7 +385,7 @@ function computeAll(){
     reBody.innerHTML = `<div class="empty">No reassignments logged.</div>`;
   } else {
     reBody.innerHTML = `<div class="card-row">` + reassign.slice(0,10).map(r => `
-      <div class="item-card"><div class="left"><b>${esc(r.Bed_ID||'')}</b><div class="meta">${esc(r.Reason||'')} · ${fmtDate(r.Timestamp)}</div></div></div>`).join('') + `</div>`;
+      <div class="item-card"><div class="left"><b>${esc(r.Bed_ID||'')}</b><div class="meta">${esc(r.Notes||'')} · ${fmtDate(r.Timestamp)}</div></div></div>`).join('') + `</div>`;
   }
 }
 
