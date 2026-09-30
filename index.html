@@ -17,6 +17,11 @@
   .brand .badge{width:36px;height:36px;border-radius:8px;background:var(--accent-dim);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;}
   .brand h1{font-size:16px;margin:0;}
   .brand .sub{font-size:12px;color:var(--muted);margin-top:2px;}
+  .auth-box{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
+  .auth-box input{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;width:96px;}
+  .btn[disabled]{opacity:.4;cursor:not-allowed;}
+  .sub-h{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px;}
+  .inline-in{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 6px;font-size:11px;}
   .role-toggle{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
   .role-toggle button{background:none;border:none;color:var(--muted);padding:6px 12px;font-size:12px;cursor:pointer;}
   .role-toggle button.active{background:var(--accent-dim);color:#fff;}
@@ -86,10 +91,7 @@
       <div class="sub">VPOS Lifecycle Dashboard</div>
     </div>
   </div>
-  <div class="role-toggle">
-    <button id="roleManager" class="active">Manager</button>
-    <button id="roleFounder">Founder</button>
-  </div>
+  <div class="auth-box" id="authBox"></div>
   <div class="status-block">
     <span class="sync-dot"></span>
     <span id="syncLabel">Live · synced --:--</span>
@@ -110,7 +112,7 @@
 <main>
   <div class="kpi-grid">
     <div class="kpi">
-      <div class="label">Active/Prepped Beds</div>
+      <div class="label">Beds Verified Ready</div>
       <div class="value" id="kpiBeds">0 <small>of 0</small></div>
     </div>
     <div class="kpi">
@@ -132,7 +134,7 @@
       <div class="panel">
         <div class="panel-head">
           <span class="icon">&#128209;</span>
-          <div class="titles"><h2>Pending Field Verification</h2><div class="desc">Locks DOB · activates lifecycle engine</div></div>
+          <div class="titles"><h2>Pending Field Verification</h2><div class="desc">Plantings to verify · beds to release</div></div>
           <div class="count" id="pvCount">0</div>
         </div>
         <div class="panel-body" id="pvBody"></div>
@@ -189,7 +191,7 @@
       <div class="panel">
         <div class="panel-head">
           <span class="icon">&#9888;</span>
-          <div class="titles"><h2>Exception Overrides</h2><div class="desc">Requires_Action = TRUE</div></div>
+          <div class="titles"><h2>Exception Overrides</h2><div class="desc">Open exceptions · manager resolves with a note</div></div>
           <div class="count" id="exoCount">0</div>
         </div>
         <div class="panel-body" id="exoBody"></div>
@@ -208,7 +210,7 @@
   </div>
 </main>
 
-<footer id="sourceFooter">Source: local snapshot (uploaded workbook). Connect to the live Apps Script Web App to enable verification and exception writes.</footer>
+<footer id="sourceFooter">Source: local snapshot (uploaded workbook). Connect live and sign in as a manager to verify and resolve.</footer>
 
 <script>
 // ============================================================
@@ -258,35 +260,62 @@ function computeAll(){
   };
 
   // --- KPIs ---
-  const activePrepped = beds.filter(b => ['ACTIVE','PREPPED','PREP'].includes((b.Bed_Status||'').toUpperCase())).length;
+  // Beds Verified Ready = beds whose physical state has been initialised (set by a manager verification or a lifecycle
+  // transition). A blank Bed_Status is UNVERIFIED and counts as NOT ready; it never implies any history.
+  const bedStat = (b) => String(b.Bed_Status||'').trim().toUpperCase();
+  const verifiedReady = beds.filter(b => bedStat(b) && bedStat(b) !== 'UNVERIFIED').length;
   const totalBeds = beds.length;
 
-  const pendingVerification = sessions.filter(s => (s.Status||'').toUpperCase() === 'COMPLETED');
+  // Plantings awaiting manager verification: assigned (Location_ID) cohorts in PRE_PLANTING with no Actual_DOB.
+  const plantingsPending = cohortProd.filter(c => String(c.Cohort_Status||'').trim().toUpperCase() === 'PRE_PLANTING' && c.Location_ID && !c.Actual_DOB);
+
+  // Beds that block a PROPOSED assignment because nobody has verified them ready.
+  const bedById = {}; beds.forEach(b => { bedById[String(b.Bed_ID).trim().toUpperCase()] = b; });
+  const blockers = []; const seenB = {};
+  caq.filter(c => String(c.Status||'').toUpperCase() === 'PROPOSED').forEach(c => {
+    const id = String(c.Final_Bed || c.Recommended_Bed || '').trim().toUpperCase();
+    const bed = bedById[id];
+    if(bed && !seenB[id] && (!bedStat(bed) || bedStat(bed) === 'UNVERIFIED') && !bed.Current_Cohort_ID){
+      seenB[id] = true; blockers.push({ bedId: bed.Bed_ID, cohortId: c.Cohort_ID, crop: c.Crop_Name });
+    }
+  });
 
   const openExceptions = exceptions.filter(e => (e.Exception_Status||'').toUpperCase() === 'OPEN');
-
   const cohortsStaged = caq.filter(c => (c.Status||'').toUpperCase() === 'APPROVED');
+  const proposedN = caq.filter(c => (c.Status||'').toUpperCase() === 'PROPOSED').length;
 
-  $('kpiBeds').innerHTML = `${activePrepped} <small>of ${totalBeds}</small>`;
-  $('kpiPending').textContent = pendingVerification.length;
+  $('kpiBeds').innerHTML = `${verifiedReady} <small>of ${totalBeds}</small>`;
+  $('kpiPending').textContent = plantingsPending.length + blockers.length;
   $('kpiExceptions').textContent = openExceptions.length;
   $('kpiStaged').textContent = cohortsStaged.length;
 
-  // --- Pending Field Verification ---
-  $('pvCount').textContent = pendingVerification.length;
-  const pvBody = $('pvBody');
-  if(pendingVerification.length === 0){
-    pvBody.innerHTML = `<div class="empty">&#128209; No field activity logged yet.</div>`;
-  } else {
-    pvBody.innerHTML = `<div class="card-row">` + pendingVerification.map(s => `
+  // --- Pending Field Verification: real manager verifications (authenticated actions) ---
+  const can = canAct();
+  const dis = can ? '' : ' disabled title="Sign in as a manager (live connection) to act"';
+  $('pvCount').textContent = plantingsPending.length + blockers.length;
+  const today = new Date().toISOString().slice(0,10);
+  let pv = '';
+  pv += `<div class="sub-h">Plantings awaiting verification (${plantingsPending.length})</div>`;
+  pv += plantingsPending.length ? `<div class="card-row">` + plantingsPending.map(c => `
       <div class="item-card">
-        <div class="left">
-          <b>${esc(s.Bed_ID)} · ${esc(s.Activity_Name||'—')}</b>
-          <div class="meta">${esc(userName(s.Worker_ID))} · completed ${fmtDate(s.End_Time)}</div>
+        <div class="left"><b>${esc(c.Location_ID)} · ${esc(c.Crop_Name||c.Crop_ID)}</b>
+          <div class="meta">${esc(c.Cohort_ID)} · planned ${fmtDate(c.Planned_DOB)}</div></div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input class="inline-in" type="date" id="dob_${esc(c.Cohort_ID)}" value="${today}"${dis}>
+          <button class="btn" onclick="verifyPlantingUI('${esc(c.Cohort_ID)}')"${dis}>Verify planting</button>
         </div>
-        <button class="btn" onclick="verifySession('${esc(s.Session_ID)}')">Verify</button>
-      </div>`).join('') + `</div>`;
-  }
+      </div>`).join('') + `</div>` : `<div class="empty">None. A cohort appears here once its assignment is approved.</div>`;
+  pv += `<div class="sub-h">Beds blocking a proposed assignment (${blockers.length}) · not verified ready</div>`;
+  pv += blockers.length ? `<div class="card-row">` + blockers.slice(0, 15).map(x => `
+      <div class="item-card">
+        <div class="left"><b>${esc(x.bedId)}</b><div class="meta">Needed for ${esc(x.cohortId)}${x.crop?' · '+esc(x.crop):''}</div></div>
+        <button class="btn" onclick="verifyBedUI('${esc(x.bedId)}')"${dis}>Verify bed ready</button>
+      </div>`).join('') + `</div>` + (blockers.length > 15 ? `<div class="meta" style="margin-top:6px;">Showing 15 of ${blockers.length}.</div>` : '') : `<div class="empty">No proposed assignment is waiting on a bed verification.</div>`;
+  pv += `<div class="note" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">Verify any bed by ID (it must be empty, cleared and checked):
+      <input class="inline-in" id="vbBedId" placeholder="B1-01" style="width:80px;"${dis}>
+      <button class="btn" onclick="verifyBedUI(document.getElementById('vbBedId').value)"${dis}>Verify bed ready</button></div>`;
+  pv += `<div class="note">Assignments awaiting approval: ${proposedN}. Approve or change them in ranch_aab (Cohort Board).</div>`;
+  $('pvBody').innerHTML = pv;
 
   // --- Active Lifecycle Cards (verified beds, DOB-anchored) ---
   const verifiedBeds = beds.filter(b => b.Current_Cohort_ID && b.Last_Action_Date);
@@ -363,18 +392,19 @@ function computeAll(){
       </tr>`).join('');
   }
 
-  // --- Exception Overrides (Requires_Action = TRUE) ---
-  const overrides = exceptions.filter(e => e.Requires_Action === true || String(e.Requires_Action).toUpperCase() === 'TRUE');
+  // --- Exceptions (Exception_Status = OPEN). Requires_Action is left blank by the engines, so it cannot be the filter. ---
+  const overrides = openExceptions;
   $('exoCount').textContent = overrides.length;
   const exoBody = $('exoBody');
+  const disE = canAct() ? '' : ' disabled title="Sign in as a manager (live connection) to resolve"';
   if(overrides.length === 0){
-    exoBody.innerHTML = `<div class="empty" style="color:var(--accent);">&#9989; No exceptions logged.</div>`;
+    exoBody.innerHTML = `<div class="empty" style="color:var(--accent);">&#9989; No open exceptions.</div>`;
   } else {
     exoBody.innerHTML = `<div class="card-row">` + overrides.map(e => `
       <div class="item-card">
         <div class="left"><b>${esc(e.Exception_Type||'Exception')} · ${esc(e.Cohort_ID||e.Bed_ID||'')}</b>
         <div class="meta">${esc(e.Blocked_Reason||e.Exception_Notes||'')}</div></div>
-        <span class="pill open">OPEN</span>
+        <button class="btn" onclick="resolveExceptionUI('${esc(e.Exception_ID)}')"${disE}>Resolve</button>
       </div>`).join('') + `</div>`;
   }
 
@@ -417,7 +447,7 @@ async function connectLive(){
     DATA = json;
     MODE = 'live';
     setStatus('connected','Connected.');
-    $('sourceFooter').textContent = 'Source: live Apps Script connection. Verifications and exception resolutions write directly to the workbook.';
+    $('sourceFooter').textContent = 'Source: live Apps Script connection. Reading is open; verifying and resolving need a manager sign-in and write to the workbook under your name.';
     syncNowLabel();
     computeAll();
   } catch(err){
@@ -439,31 +469,84 @@ function useSnapshot(){
   DATA = SNAPSHOT;
   MODE = 'snapshot';
   setStatus('snapshot','Using snapshot');
-  $('sourceFooter').textContent = 'Source: local snapshot (uploaded workbook). Connect to the live Apps Script Web App to enable verification and exception writes.';
+  $('sourceFooter').textContent = 'Source: local snapshot (uploaded workbook). Connect live and sign in as a manager to verify and resolve.';
   syncNowLabel();
   computeAll();
 }
 
-async function verifySession(sessionId){
-  if(MODE !== 'live'){
-    alert('Connect to the live Apps Script Web App to verify field activity — this action needs to write back to the workbook.');
-    return;
+// ============================================================
+// Manager sign-in + authenticated actions (same login/token flow as ranch_aab; identity comes from the session, never the page)
+// ============================================================
+const APP_NAME = 'VPOS_dashboard';
+let AUTH = null;
+try { AUTH = JSON.parse(sessionStorage.getItem('vpos_dash_auth') || 'null'); } catch(e){ AUTH = null; }
+
+function canAct(){ return MODE === 'live' && !!(AUTH && AUTH.token); }
+
+function renderAuth(){
+  const box = $('authBox');
+  if(AUTH && AUTH.token){
+    box.innerHTML = `<span>${esc(AUTH.name||AUTH.workerId)} · ${esc(AUTH.role||'')}</span><button class="btn secondary" onclick="signOut()">Sign out</button>`;
+  } else {
+    box.innerHTML = `<input id="loginId" placeholder="Worker ID" autocomplete="username"><input id="loginPin" type="password" placeholder="PIN" autocomplete="current-password"><button class="btn" onclick="signIn()">Sign in</button>`;
   }
+}
+
+async function post(action, payload){
+  if(MODE !== 'live') throw new Error('Connect to the live Apps Script Web App first.');
+  const body = Object.assign({ action }, payload || {});
+  if(AUTH && AUTH.token) body.token = AUTH.token;
+  const res = await fetch(EXEC_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(body) });
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  const json = JSON.parse(await res.text());
+  if(json && json.ok === false){
+    if(['UNAUTHENTICATED','ROLE_NOT_ALLOWED'].includes(String(json.code))){ AUTH = null; sessionStorage.removeItem('vpos_dash_auth'); renderAuth(); computeAll(); }
+    throw new Error(json.error || 'The request failed.');
+  }
+  return json.data !== undefined ? json.data : json;
+}
+
+async function signIn(){
+  const workerId = ($('loginId').value||'').trim(), pin = $('loginPin').value||'';
+  if(!workerId || !pin){ alert('Enter your worker ID and PIN.'); return; }
   try{
-    const res = await fetch(EXEC_URL, {
-      method: 'POST',
-      headers: {'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({action:'verify-session', session_id: sessionId})
-    });
-    const json = await res.json();
-    if(json.success){
-      await connectLive();
-    } else {
-      alert('Verify failed: ' + (json.error || 'unknown error'));
-    }
-  } catch(err){
-    alert('Verify failed: ' + err.message);
-  }
+    const d = await post('login', { workerId, pin, app: APP_NAME, device: 'VPOS dashboard' });
+    AUTH = { token: d.token, name: d.name, role: d.role, workerId: d.workerId || workerId };
+    sessionStorage.setItem('vpos_dash_auth', JSON.stringify(AUTH));
+    renderAuth(); computeAll();
+  }catch(err){ alert('Sign-in failed: ' + err.message); }
+}
+function signOut(){
+  post('logout', {}).catch(()=>{});
+  AUTH = null; sessionStorage.removeItem('vpos_dash_auth'); renderAuth(); computeAll();
+}
+
+async function afterWrite(){ await connectLive(); }
+
+async function verifyPlantingUI(cohortId){
+  if(!canAct()) return;
+  const el = document.getElementById('dob_' + cohortId);
+  const actualDob = el && el.value;
+  if(!actualDob){ alert('Pick the date it was actually planted.'); return; }
+  if(!confirm('Confirm ' + cohortId + ' was planted on ' + actualDob + '? This locks the date of birth and starts its lifecycle.')) return;
+  try{ await post('verify-planting', { cohortId, actualDob }); await afterWrite(); }
+  catch(err){ alert('Verify planting failed: ' + err.message); }
+}
+
+async function verifyBedUI(bedId){
+  bedId = String(bedId||'').trim();
+  if(!canAct() || !bedId) return;
+  if(!confirm('Confirm bed ' + bedId + ' is physically ready: empty, cleared of residue and checked? Your name and the time are recorded.')) return;
+  try{ await post('verify-bed-ready', { bedId }); await afterWrite(); }
+  catch(err){ alert('Verify bed ready failed: ' + err.message); }
+}
+
+async function resolveExceptionUI(exceptionId){
+  if(!canAct()) return;
+  const notes = prompt('Resolution note (required). What was done to clear this exception?');
+  if(!notes || !notes.trim()) return;
+  try{ await post('resolve-exception', { exceptionId, notes: notes.trim() }); await afterWrite(); }
+  catch(err){ alert('Resolve failed: ' + err.message); }
 }
 
 // ============================================================
@@ -473,9 +556,8 @@ $('connectBtn').addEventListener('click', connectLive);
 $('refreshBtn').addEventListener('click', refreshNow);
 $('refreshIcon').addEventListener('click', refreshNow);
 $('snapshotBtn').addEventListener('click', useSnapshot);
-$('roleManager').addEventListener('click', () => { $('roleManager').classList.add('active'); $('roleFounder').classList.remove('active'); });
-$('roleFounder').addEventListener('click', () => { $('roleFounder').classList.add('active'); $('roleManager').classList.remove('active'); });
 
+renderAuth();
 $('todayLabel').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'});
 if(EXEC_URL){ $('execUrl').value = EXEC_URL; }
 
