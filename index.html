@@ -73,6 +73,15 @@
   .item-card .left .meta{font-size:11px;color:var(--muted);margin-top:2px;}
   .item-card .btn{padding:5px 10px;font-size:11px;}
 
+  .vrow{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--border);}
+  .vrow:last-child{border-bottom:none;}
+  .vrow .vb{flex:1;min-width:0;} .vrow .vb .t{font-weight:600;font-size:13px;} .vrow .vb .d{font-size:12px;color:var(--muted);margin-top:2px;}
+  .chip-w{display:inline-block;background:rgba(224,165,61,.15);color:var(--warn);border-radius:10px;padding:1px 8px;font-size:11px;margin-left:6px;}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;align-items:center;}
+  dialog{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:340px;width:90%;}
+  dialog::backdrop{background:rgba(0,0,0,.6);}
+  dialog label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;} dialog .inline-in{width:100%;padding:8px;font-size:14px;}
+  .err{color:var(--danger);font-size:12px;margin-top:8px;min-height:16px;}
   footer{padding:16px 20px;text-align:center;font-size:11px;color:var(--muted);border-top:1px solid var(--border);}
 </style>
 </head>
@@ -91,6 +100,7 @@
     <span id="syncLabel">Connecting…</span>
     <button class="refresh-btn" id="refreshIcon" title="Refresh now">&#8635;</button>
     <span id="todayLabel"></span>
+    <span id="authBlock"></span>
   </div>
 </header>
 
@@ -128,7 +138,7 @@
       <div class="panel">
         <div class="panel-head">
           <span class="icon">&#128209;</span>
-          <div class="titles"><h2>Pending Field Verification</h2><div class="desc">Plantings to verify · beds to release</div></div>
+          <div class="titles"><h2>Pending Field Verification</h2><div class="desc">Activities done by workers · plantings · beds to release</div></div>
           <div class="count" id="pvCount">0</div>
         </div>
         <div class="panel-body" id="pvBody"></div>
@@ -204,7 +214,15 @@
   </div>
 </main>
 
-<footer id="sourceFooter">Source: live workbook feed (read-only). Verify and resolve in the manager app.</footer>
+<dialog id="loginDlg">
+  <h2 style="font-size:15px;margin:0 0 4px;">Manager sign-in</h2>
+  <div class="meta" style="font-size:12px;color:var(--muted);">Sign in to verify activities, plantings and beds from this dashboard.</div>
+  <label for="liId">Worker ID</label><input class="inline-in" id="liId" autocomplete="username">
+  <label for="liPin">PIN</label><input class="inline-in" id="liPin" type="password" inputmode="numeric" autocomplete="current-password">
+  <div class="err" id="liErr"></div>
+  <div class="bar"><button class="btn" id="liGo" type="button">Sign in</button><button class="btn secondary" type="button" onclick="$('loginDlg').close()">Cancel</button></div>
+</dialog>
+<footer id="sourceFooter">Source: live workbook feed. Sign in as a manager to verify.</footer>
 
 <script>
 
@@ -291,32 +309,8 @@ function computeAll(){
     $('lbNote').textContent = 'Labor budget is not available from the server.';
   }
 
-  // --- Pending Field Verification: real manager verifications (authenticated actions) ---
-  const dis = ' disabled title="Verify and resolve in the manager app"';
-  $('pvCount').textContent = plantingsPending.length + blockers.length;
-  const today = new Date().toISOString().slice(0,10);
-  let pv = '';
-  pv += `<div class="sub-h">Plantings awaiting verification (${plantingsPending.length})</div>`;
-  pv += plantingsPending.length ? `<div class="card-row">` + plantingsPending.map(c => `
-      <div class="item-card">
-        <div class="left"><b>${esc(c.Location_ID)} · ${esc(c.Crop_Name||c.Crop_ID)}</b>
-          <div class="meta">${esc(c.Cohort_ID)} · planned ${fmtDate(c.Planned_DOB)}</div></div>
-        <div style="display:flex;gap:6px;align-items:center;">
-          <input class="inline-in" type="date" id="dob_${esc(c.Cohort_ID)}" value="${today}"${dis}>
-          <button class="btn"${dis}>Verify planting</button>
-        </div>
-      </div>`).join('') + `</div>` : `<div class="empty">None. A cohort appears here once its assignment is approved.</div>`;
-  pv += `<div class="sub-h">Beds blocking a proposed assignment (${blockers.length}) · not verified ready</div>`;
-  pv += blockers.length ? `<div class="card-row">` + blockers.slice(0, 15).map(x => `
-      <div class="item-card">
-        <div class="left"><b>${esc(x.bedId)}</b><div class="meta">Needed for ${esc(x.cohortId)}${x.crop?' · '+esc(x.crop):''}</div></div>
-        <button class="btn"${dis}>Verify bed ready</button>
-      </div>`).join('') + `</div>` + (blockers.length > 15 ? `<div class="meta" style="margin-top:6px;">Showing 15 of ${blockers.length}.</div>` : '') : `<div class="empty">No proposed assignment is waiting on a bed verification.</div>`;
-  pv += `<div class="note" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">Verify any bed by ID (it must be empty, cleared and checked):
-      <input class="inline-in" id="vbBedId" placeholder="B1-01" style="width:80px;"${dis}>
-      <button class="btn"${dis}>Verify bed ready</button></div>`;
-  pv += `<div class="note">Assignments awaiting approval: ${proposedN}. Approve or change them in ranch_aab (Cohort Board).</div>`;
-  $('pvBody').innerHTML = pv;
+  PV.plant = plantingsPending; PV.block = blockers; PV.proposedN = proposedN;
+  renderPending();
 
   // --- Active Lifecycle Cards (verified beds, DOB-anchored) ---
   const verifiedBeds = beds.filter(b => b.Current_Cohort_ID && b.Last_Action_Date);
@@ -421,6 +415,151 @@ function computeAll(){
 }
 
 // ============================================================
+// Manager sign-in + verification (same routes as the manager app and ranch_aab)
+// ============================================================
+const APP_NAME = 'VPOS_dashboard';          // role gate in Auth.gs: Manager, Founder
+const SESSION_KEY = 'vpos_dashboard_session';
+const AUTH = { token:'', name:'', id:'' };
+let TODAY = null, PV = { plant:[], block:[], proposedN:0, sel:{}, busy:false };
+const attr = (s) => esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+try{ const o = JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null'); if(o && o.token) Object.assign(AUTH,o); }catch(e){}
+function saveAuth(){ try{ AUTH.token ? sessionStorage.setItem(SESSION_KEY, JSON.stringify(AUTH)) : sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
+
+async function api(action, payload, timeoutMs){
+  const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort(), timeoutMs||60000);
+  try{
+    const body = Object.assign({action}, payload||{}); if(AUTH.token && body.token===undefined) body.token = AUTH.token;
+    const res = await fetch(EXEC_URL, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(body), redirect:'follow', signal:ctrl.signal});
+    if(!res.ok) throw new Error('The server answered with status ' + res.status + '.');
+    const json = JSON.parse(await res.text());
+    if(json && json.ok===false){
+      if(['UNAUTHENTICATED','ROLE_NOT_ALLOWED'].includes(String(json.code))) signOut(json.error);
+      throw new Error(json.error || 'The request failed.');
+    }
+    return json.data!==undefined ? json.data : json;
+  } finally { clearTimeout(timer); }
+}
+function renderAuth(){
+  $('authBlock').innerHTML = AUTH.token
+    ? `${esc(AUTH.name||AUTH.id)} · <button class="refresh-btn" onclick="signOut()">Sign out</button>`
+    : `<button class="btn" onclick="openLogin()">Manager sign-in</button>`;
+}
+function openLogin(msg){ $('liErr').textContent = msg||''; $('liPin').value=''; $('loginDlg').showModal(); $('liId').focus(); }
+async function doLogin(){
+  const id = $('liId').value.trim(), pin = $('liPin').value.trim();
+  if(!id||!pin){ $('liErr').textContent='Enter your worker ID and PIN.'; return; }
+  $('liGo').disabled = true;
+  try{
+    const r = await api('login', {workerId:id, pin, app:APP_NAME, device:String(navigator.userAgent||'').slice(0,120)});
+    Object.assign(AUTH,{token:r.token, name:r.name, id:r.workerId}); saveAuth(); $('loginDlg').close(); renderAuth(); await loadToday();
+  }catch(e){ $('liErr').textContent = e.message; }
+  $('liGo').disabled = false;
+}
+function signOut(msg){
+  if(AUTH.token) api('logout',{}).catch(()=>{});
+  Object.assign(AUTH,{token:'',name:'',id:''}); saveAuth(); TODAY=null; PV.sel={}; renderAuth(); if(DATA.BED_MASTER) computeAll();
+  if(typeof msg==='string' && msg) $('syncLabel').textContent = msg;
+}
+async function loadToday(){
+  if(!AUTH.token){ TODAY=null; return; }
+  try{ TODAY = await api('get-manager-today-view', {}, 60000); }catch(e){ console.error(e); TODAY=null; }
+  if(DATA.BED_MASTER) computeAll();
+}
+function needAuth(){ if(AUTH.token) return false; openLogin('Sign in to verify.'); return true; }
+
+/* ---- pending-verification lists. Labels match the manager app and ranch_aab. ---- */
+function shortDesc(t,n){ t=String(t||'').replace(/\s+/g,' ').trim(); const m=t.match(/^.*?[.;](\s|$)/); const x=m?m[0].trim():t; return x.length>(n||110)?x.slice(0,(n||110)-1).trimEnd()+'\u2026':x; }
+function actInfo(name){ const c=((TODAY&&TODAY.activityCatalog)||[]).find(x=>x.name===name)||{}; const id=c.id||c.activityId||''; return {label:id?id+': '+name:name, desc:shortDesc(c.description||c.desc)}; }
+const hm = (h) => { const m=Math.max(0,Math.round(Number(h||0)*60)); return Math.floor(m/60)+':'+String(m%60).padStart(2,'0'); };
+function workLines(w){
+  const who = w.completedBy.map(x=>esc(x.name)+(w.completedBy.length>1?' ('+hm(x.hours)+')':'')).join(', ');
+  let t = 'Time taken <b>'+hm(w.actualHours)+'</b>';
+  if(w.budgetHours!=null){ const d=Number(w.varianceHours||0); t += ' vs budget <b>'+hm(w.budgetHours)+'</b> · '+(d>0.004?'<b style="color:var(--warn)">'+hm(d)+' over budget</b>':d<-0.004?hm(-d)+' under budget':'on budget'); }
+  return `<div class="d">Completed by <b>${who}</b> · ${esc(fmtDate(w.completedAt))}</div><div class="d">${t}</div>`;
+}
+function pendingActivities(){
+  const out=[]; ((TODAY&&TODAY.beds)||[]).forEach(b=>{ const ph=b.postHarvest; if(!ph) return;
+    (ph.steps||[]).forEach(s=>{ if(s.work && s.needsVerification) out.push({bed:b, step:s, key:b.id+'||'+s.name}); }); });
+  return out.sort((a,b)=>String(a.bed.id).localeCompare(String(b.bed.id),undefined,{numeric:true})||String(a.step.name).localeCompare(String(b.step.name)));
+}
+function readyBeds(){ return ((TODAY&&TODAY.beds)||[]).filter(b=>b.postHarvest && b.postHarvest.readyToVerify===true); }
+
+function renderPending(){
+  const acts = pendingActivities(), ready = readyBeds(), signed = !!AUTH.token;
+  const total = PV.plant.length + PV.block.length + (signed ? acts.length + ready.length : 0);
+  $('kpiPending').textContent = total; $('pvCount').textContent = total;
+  const today = new Date(); const iso = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+  const nSel = acts.filter(x=>PV.sel[x.key]).length;
+  let h = `<div class="sub-h">Activities to verify${signed?' ('+acts.length+')':''}</div>`;
+  if(!signed) h += `<div class="empty">Sign in as a manager to see finished activities, who did them, and verify them. <button class="btn" onclick="openLogin()">Manager sign-in</button></div>`;
+  else if(!TODAY) h += `<div class="empty">Loading activities…</div>`;
+  else if(!acts.length) h += `<div class="empty">No finished activity is waiting for your sign-off.</div>`;
+  else h += `<div class="bar"><button class="btn secondary" onclick="pvAll(true)">Select all</button><button class="btn secondary" onclick="pvAll(false)">Clear</button>
+      <button class="btn" id="pvGo" ${nSel?'':'disabled'} onclick="pvVerify()">${nSel?'Verify selected ('+nSel+')':'Verify selected'}</button></div>`
+    + acts.map(x=>{ const i=actInfo(x.step.name);
+      return `<div class="vrow"><input type="checkbox" ${PV.sel[x.key]?'checked':''} data-k="${attr(x.key)}" onchange="pvTog(this.dataset.k,this.checked)" aria-label="Select ${attr(i.label)} on bed ${attr(x.bed.id)}">
+        <div class="vb"><div class="t">${esc(i.label)} <span class="meta" style="font-weight:400;color:var(--muted);">Bed ${esc(x.bed.id)}</span><span class="chip-w">Waiting for your verification</span></div>
+        ${i.desc?`<div class="d">${esc(i.desc)}</div>`:''}${workLines(x.step.work)}</div></div>`; }).join('');
+
+  h += `<div class="sub-h">Plantings to verify (${PV.plant.length})</div>`;
+  h += PV.plant.length ? `<div class="card-row">`+PV.plant.map(c=>`
+      <div class="item-card"><div class="left"><b>${esc(c.Location_ID)} · ${esc(c.Crop_Name||c.Crop_ID)}</b><div class="meta">${esc(c.Cohort_ID)} · planned ${fmtDate(c.Planned_DOB)}</div></div>
+        <div style="display:flex;gap:6px;align-items:center;"><input class="inline-in" type="date" id="dob_${attr(c.Cohort_ID)}" value="${iso}" max="${iso}">
+        <button class="btn" data-c="${attr(c.Cohort_ID)}" onclick="pvPlant(this.dataset.c)">Verify planting</button></div></div>`).join('')+`</div>`
+    : `<div class="empty">None. A cohort appears here once its assignment is approved.</div>`;
+
+  if(signed){
+    h += `<div class="sub-h">Beds ready to release (${ready.length})</div>`;
+    h += ready.length ? `<div class="card-row">`+ready.map(b=>{ const ph=b.postHarvest, scope=ph.bedLevel?'BED:'+b.id:b.cohortId;
+      return `<div class="item-card"><div class="left"><b>Bed ${esc(b.id)}</b><div class="meta">Every reset activity is done or skipped. Check the bed, then verify it.</div></div>
+        <button class="btn" data-s="${attr(scope)}" data-b="${attr(b.id)}" onclick="pvRelease(this.dataset.s,this.dataset.b)">Verify bed ready</button></div>`; }).join('')+`</div>`
+      : `<div class="empty">No bed has finished its reset yet.</div>`;
+  }
+  h += `<div class="sub-h">Beds not verified ready (${PV.block.length}) · blocking a proposed assignment</div>`;
+  h += PV.block.length ? `<div class="card-row">`+PV.block.slice(0,15).map(x=>`
+      <div class="item-card"><div class="left"><b>Bed ${esc(x.bedId)}</b><div class="meta">Needed for ${esc(x.cohortId)}${x.crop?' · '+esc(x.crop):''}</div></div>
+        <button class="btn" data-b="${attr(x.bedId)}" onclick="pvBed(this.dataset.b)">Verify bed ready</button></div>`).join('')+`</div>`+(PV.block.length>15?`<div class="meta" style="margin-top:6px;">Showing 15 of ${PV.block.length}.</div>`:'')
+    : `<div class="empty">No proposed assignment is waiting on a bed verification.</div>`;
+  h += `<div class="note" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">Verify any bed by ID (it must be empty, cleared and checked):
+      <input class="inline-in" id="vbBedId" placeholder="B1-01" style="width:80px;"><button class="btn" onclick="pvBed($('vbBedId').value.trim())">Verify bed ready</button></div>`;
+  h += `<div class="note">Assignments awaiting approval: ${PV.proposedN}. Approve or change them in ranch_aab (Cohort Board).</div>`;
+  $('pvBody').innerHTML = h;
+}
+function pvTog(k,on){ if(on) PV.sel[k]=true; else delete PV.sel[k]; const n=pendingActivities().filter(x=>PV.sel[x.key]).length, b=$('pvGo'); if(b){ b.disabled=!n; b.textContent=n?'Verify selected ('+n+')':'Verify selected'; } }
+function pvAll(on){ PV.sel={}; if(on) pendingActivities().forEach(x=>{PV.sel[x.key]=true;}); renderPending(); }
+async function pvRefresh(){ await Promise.all([loadFeed(), loadToday()]); }
+async function pvRun(fn, okMsg){
+  if(PV.busy) return; PV.busy=true;
+  try{ await fn(); $('syncLabel').textContent = okMsg; } catch(e){ alert(e.message); }
+  PV.busy=false; PV.sel={}; await pvRefresh();
+}
+function pvVerify(){
+  if(needAuth()) return;
+  const items = pendingActivities().filter(x=>PV.sel[x.key]); if(!items.length) return;
+  if(!confirm('Verify '+items.length+' completed '+(items.length===1?'activity':'activities')+'?\n\n'+items.map(x=>x.bed.id+'  '+actInfo(x.step.name).label).join('\n')+'\n\nThis is logged with your name and the time. It does not release any bed.')) return;
+  const by={}; items.forEach(x=>{ (by[x.bed.id]=by[x.bed.id]||{bed:x.bed,names:[]}).names.push(x.step.name); });
+  pvRun(async()=>{ for(const g of Object.values(by)){ const ph=g.bed.postHarvest;
+    await api('verify-activities',{scope:ph.bedLevel?'BED:'+g.bed.id:g.bed.cohortId, bedId:g.bed.id, cohortId:ph.bedLevel?'':g.bed.cohortId, activities:g.names}); } }, items.length+' verified');
+}
+function pvPlant(cohortId){
+  if(needAuth()) return;
+  const el=$('dob_'+cohortId), dob=el&&el.value; if(!dob){ alert('Choose the planting date.'); return; }
+  if(!confirm('Verify planting of '+cohortId+' on '+dob+'? This starts the crop clock and irrigation schedule.')) return;
+  pvRun(()=>api('verify-planting',{cohortId, actualDob:dob}), 'Planting verified');
+}
+function pvBed(bedId){
+  if(needAuth()) return;
+  if(!bedId){ alert('Enter a bed ID.'); return; }
+  if(!confirm('Verify '+bedId+' is physically ready for production? It becomes Available and can be planted.')) return;
+  pvRun(()=>api('verify-bed-ready',{bedId}), 'Bed verified ready');
+}
+function pvRelease(scope,bedId){
+  if(needAuth()) return;
+  if(!confirm('Verify '+bedId+' ready and release it to Available? Any completed activities still waiting are signed off with it.')) return;
+  pvRun(()=> String(scope).indexOf('BED:')===0 ? api('verify-bed-ready',{bedId,requireVerified:true,verifyAll:true}) : api('complete-cohort',{cohortId:scope,requireVerified:true,verifyAll:true}), 'Bed verified ready');
+}
+
+// ============================================================
 // Live feed: loads on open and on refresh (read-only)
 // ============================================================
 function syncNowLabel(){
@@ -444,9 +583,12 @@ async function loadFeed(){
 // ============================================================
 // Init
 // ============================================================
-$('refreshIcon').addEventListener('click', loadFeed);
+$('refreshIcon').addEventListener('click', pvRefresh);
+$('liGo').addEventListener('click', doLogin);
+$('liPin').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+renderAuth();
 $('todayLabel').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'});
-loadFeed();
+loadFeed().then(loadToday);
 </script>
 </body>
 </html>
