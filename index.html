@@ -251,6 +251,8 @@ function esc(s){ return (s===undefined||s===null) ? '' : String(s).replace(/[&<>
 // Computation layer — same logic works on the live JSON feed,
 // shaped as { SHEET_NAME: [ {col: val, ...}, ... ] }
 // ============================================================
+/* Server snapshot (VerificationSnapshot.gs): signed-in = full detail from get-manager-today-view, signed-out = counts from the public feed. Same numbers either way. */
+function vsNow(){ return (TODAY && TODAY.verification) || DATA.VERIFICATION || null; }
 function computeAll(){
   const beds = DATA.BED_MASTER || [];
   const caq = DATA.COHORT_ASSIGNMENT_QUEUE || [];
@@ -269,11 +271,16 @@ function computeAll(){
   // Beds Verified Ready = beds whose physical state has been initialised (set by a manager verification or a lifecycle
   // transition). A blank Bed_Status is UNVERIFIED and counts as NOT ready; it never implies any history.
   const bedStat = (b) => String(b.Bed_Status||'').trim().toUpperCase();
-  const verifiedReady = beds.filter(b => bedStat(b) && bedStat(b) !== 'UNVERIFIED').length;
-  const totalBeds = beds.length;
+  // Beds Verified Ready = Bed_Status AVAILABLE (verified physically ready and open for a cohort), as the Bed Status board counts it.
+  // A bed still in POST-HARVEST ACTIVITIES, or planted / growing, is NOT counted here (it used to be, which made every bed look ready).
+  const VS = vsNow();
+  const verifiedReady = VS ? ((VS.bedStatus.totals||{})['AVAILABLE']||0) : beds.filter(b => bedStat(b) === 'AVAILABLE').length;
+  const totalBeds = VS ? VS.bedStatus.total : beds.length;
 
   // Plantings awaiting manager verification: assigned (Location_ID) cohorts in PRE_PLANTING with no Actual_DOB.
-  const plantingsPending = cohortProd.filter(c => String(c.Cohort_Status||'').trim().toUpperCase() === 'PRE_PLANTING' && c.Location_ID && !c.Actual_DOB);
+  const plantingsPending = VS
+    ? (VS.plantings||[]).map(p => ({ Location_ID: p.bedId, Crop_Name: p.crop, Cohort_ID: p.cohortId, Planned_DOB: p.plannedDob }))
+    : cohortProd.filter(c => String(c.Cohort_Status||'').trim().toUpperCase() === 'PRE_PLANTING' && c.Location_ID && !c.Actual_DOB);
 
   // Beds that block a PROPOSED assignment because nobody has verified them ready.
   const bedById = {}; beds.forEach(b => { bedById[String(b.Bed_ID).trim().toUpperCase()] = b; });
@@ -291,7 +298,7 @@ function computeAll(){
   const proposedN = caq.filter(c => (c.Status||'').toUpperCase() === 'PROPOSED').length;
 
   $('kpiBeds').innerHTML = `${verifiedReady} <small>of ${totalBeds}</small>`;
-  $('kpiPending').textContent = plantingsPending.length + blockers.length;
+  $('kpiPending').textContent = VS ? VS.counts.total : plantingsPending.length + blockers.length;
   $('kpiExceptions').textContent = openExceptions.length;
   $('kpiStaged').textContent = cohortsStaged.length;
 
@@ -478,15 +485,22 @@ function workLines(w){
   return `<div class="d">Completed by <b>${who}</b> · ${esc(fmtDate(w.completedAt))}</div><div class="d">${t}</div>`;
 }
 function pendingActivities(){
+  const VS = TODAY && TODAY.verification;
+  if(VS) return (VS.items||[]).map(i=>({bed:{id:i.bedId}, step:{name:i.activity, work:i.work}, key:i.bedId+'||'+i.activity}))
+    .sort((a,b)=>String(a.bed.id).localeCompare(String(b.bed.id),undefined,{numeric:true})||String(a.step.name).localeCompare(String(b.step.name)));
   const out=[]; ((TODAY&&TODAY.beds)||[]).forEach(b=>{ const ph=b.postHarvest; if(!ph) return;
     (ph.steps||[]).forEach(s=>{ if(s.work && s.needsVerification) out.push({bed:b, step:s, key:b.id+'||'+s.name}); }); });
   return out.sort((a,b)=>String(a.bed.id).localeCompare(String(b.bed.id),undefined,{numeric:true})||String(a.step.name).localeCompare(String(b.step.name)));
 }
-function readyBeds(){ return ((TODAY&&TODAY.beds)||[]).filter(b=>b.postHarvest && b.postHarvest.readyToVerify===true); }
+function readyBeds(){
+  const VS = TODAY && TODAY.verification;
+  if(VS) return (VS.readyBeds||[]).map(r=>({id:r.bedId, postHarvest:{bedLevel:String(r.scope).indexOf('BED:')===0, cohortId:r.cohortId}}));
+  return ((TODAY&&TODAY.beds)||[]).filter(b=>b.postHarvest && b.postHarvest.readyToVerify===true); }
 
 function renderPending(){
   const acts = pendingActivities(), ready = readyBeds(), signed = !!AUTH.token;
-  const total = PV.plant.length + PV.block.length + (signed ? acts.length + ready.length : 0);
+  const VSn = vsNow();
+  const total = VSn ? VSn.counts.total : PV.plant.length + PV.block.length + (signed ? acts.length + ready.length : 0);
   $('kpiPending').textContent = total; $('pvCount').textContent = total;
   const today = new Date(); const iso = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
   const nSel = acts.filter(x=>PV.sel[x.key]).length;
@@ -537,9 +551,7 @@ function pvVerify(){
   if(needAuth()) return;
   const items = pendingActivities().filter(x=>PV.sel[x.key]); if(!items.length) return;
   if(!confirm('Verify '+items.length+' completed '+(items.length===1?'activity':'activities')+'?\n\n'+items.map(x=>x.bed.id+'  '+actInfo(x.step.name).label).join('\n')+'\n\nThis is logged with your name and the time. It does not release any bed.')) return;
-  const by={}; items.forEach(x=>{ (by[x.bed.id]=by[x.bed.id]||{bed:x.bed,names:[]}).names.push(x.step.name); });
-  pvRun(async()=>{ for(const g of Object.values(by)){ const ph=g.bed.postHarvest;
-    await api('verify-activities',{scope:ph.bedLevel?'BED:'+g.bed.id:g.bed.cohortId, bedId:g.bed.id, cohortId:ph.bedLevel?'':g.bed.cohortId, activities:g.names}); } }, items.length+' verified');
+  pvRun(()=>api('verify-items',{items:items.map(x=>({bedId:x.bed.id, activity:x.step.name}))}), items.length+' verified');
 }
 function pvPlant(cohortId){
   if(needAuth()) return;
