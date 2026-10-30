@@ -115,8 +115,9 @@
       <div class="value" id="kpiPending">0</div>
     </div>
     <div class="kpi">
-      <div class="label">Open Exceptions</div>
+      <div class="label">Open Field Exceptions</div>
       <div class="value" id="kpiExceptions">0</div>
+      <div class="meta" id="kpiExcNote" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
     </div>
     <div class="kpi">
       <div class="label">Cohorts Staged</div>
@@ -301,6 +302,9 @@ function computeAll(){
   $('kpiPending').textContent = VS ? VS.counts.total : plantingsPending.length + blockers.length;
   $('kpiExceptions').textContent = openExceptions.length;
   $('kpiStaged').textContent = cohortsStaged.length;
+  // The Assignment Board's "exceptions" are cohorts blocked by a bed still in turnover, NOT field exceptions (server: AssignmentReconcile.gs).
+  const AR = DATA.ASSIGNMENT_RECON;
+  $('kpiExcNote').textContent = AR ? (AR.assignmentExceptions + ' cohorts are waiting on a bed release (' + AR.blockedBedCount + ' beds in turnover). Not field exceptions. ' + (AR.reconciled ? AR.totalCohorts + ' cohorts all accounted for.' : 'Cohort buckets do not add up.')) : '';
 
   // --- Labor hours vs budget (server roll-up, LaborBudget.gs): activities over / under / at budget ---
   const lb = DATA.LABOR_BUDGET, hrs = (h) => (Math.round(Number(h||0)*100)/100) + ' h';
@@ -309,7 +313,9 @@ function computeAll(){
     $('kpiLbUnder').textContent = lb.counts.under; $('lbUnderH').textContent = lb.counts.under ? '· ' + hrs(lb.underHours) + ' left' : '';
     $('kpiLbMatch').textContent = lb.counts.at;
     $('lbRange').textContent = lb.from + ' to ' + lb.to;
-    $('lbNote').textContent = 'Counts activities: each activity\u2019s total actual hours vs its labor-matrix budget, compared once.' + (lb.counts.unavailable ? ' ' + lb.counts.unavailable + ' with no valid budget are not counted.' : '');
+    const LA = DATA.LABOR_AUDIT && DATA.LABOR_AUDIT.summary;
+    $('lbNote').textContent = 'Counts activities: each activity\u2019s total actual hours vs its labor-matrix budget, compared once.' + (lb.counts.unavailable ? ' ' + lb.counts.unavailable + ' with no valid budget are not counted.' : '')
+      + (LA ? ' CHECK THE STANDARDS: ' + LA.recordedHours + ' h are recorded but only ' + LA.distinctWorkerHours + ' h of real worker time once overlapping timers are merged (x' + LA.overstatementFactor + '), and ' + (LA.implausibleBudgets||0) + ' budgets look implausible. Over/under is not reliable until the labor matrix is confirmed.' : '');
   } else {
     ['kpiLbOver','kpiLbUnder','kpiLbMatch'].forEach(id => { $(id).textContent = '\u2014'; });
     $('lbOverH').textContent = $('lbUnderH').textContent = $('lbRange').textContent = '';
@@ -482,7 +488,8 @@ function workLines(w){
   const who = w.completedBy.map(x=>esc(x.name)+(w.completedBy.length>1?' ('+hm(x.hours)+')':'')).join(', ');
   let t = 'Time taken <b>'+hm(w.actualHours)+'</b>';
   if(w.budgetHours!=null){ const d=Number(w.varianceHours||0); t += ' vs budget <b>'+hm(w.budgetHours)+'</b> · '+(d>0.004?'<b style="color:var(--warn)">'+hm(d)+' over budget</b>':d<-0.004?hm(-d)+' under budget':'on budget'); }
-  return `<div class="d">Completed by <b>${who}</b> · ${esc(fmtDate(w.completedAt))}</div><div class="d">${t}</div>`;
+  const bn = w.budgetNote ? `<div class="d" style="color:var(--warn);">\u26A0 ${esc(w.budgetNote)}</div>` : '';
+  return `<div class="d">Completed by <b>${who}</b> · ${esc(fmtDate(w.completedAt))}</div><div class="d">${t}</div>${bn}`;
 }
 function pendingActivities(){
   const VS = TODAY && TODAY.verification;
