@@ -166,12 +166,12 @@
       <div class="panel">
         <div class="panel-head">
           <span class="icon">&#128197;</span>
-          <div class="titles"><h2>Upcoming Calendar Schedule</h2><div class="desc">Nursery readiness · routine cadence · gates</div></div>
+          <div class="titles"><h2>Upcoming Calendar Schedule</h2><div class="desc">Propagation schedule · transplant · harvest</div></div>
           <div class="count" id="calCount">0</div>
         </div>
         <div class="panel-body">
           <div id="calBody"></div>
-          <div class="note">Most cohorts are still in Prep with target dates and no locked DOB yet — the near-term events below come from nursery readiness dates and the routine cadence rules applied to the currently live/verified beds, not from the full bed plan.</div>
+          <div class="note">Read from the propagation schedule: scheduled propagation tasks, batch start and transplant-ready dates, each unplanted cohort's propagation plan, and harvest windows opening.</div>
         </div>
       </div>
     </div>
@@ -195,7 +195,7 @@
         </div>
         <div class="panel-body">
           <table id="workerTable">
-            <thead><tr><th>Worker</th><th>Bed</th><th>Activity</th><th>Status</th><th>Last scan</th><th>Verified</th></tr></thead>
+            <thead><tr><th>Worker</th><th>Bed</th><th>Activity</th><th>Status</th><th>Started</th><th>Completed</th><th>Verified</th></tr></thead>
             <tbody id="workerBody"></tbody>
           </table>
           <div class="empty" id="workerEmpty" style="display:none;">No worker activity logged yet.</div>
@@ -363,29 +363,19 @@ function computeAll(){
       </div>`).join('') + `</div>`;
   }
 
-  // --- Upcoming Calendar Schedule (next 30 days) ---
-  const now = new Date();
-  const horizon = new Date(now.getTime() + 30*86400000);
-  const calEvents = [];
-  cohortProd.forEach(c => {
-    ['Propagation_Start','Nursery_Start','Hardening_Start','Establishment_Start','Harvest_Window_Start'].forEach(field => {
-      if(c[field]){
-        const dt = new Date(c[field]);
-        if(dt >= now && dt <= horizon){
-          calEvents.push({date: dt, label: `${field.replace('_',' ')} — ${c.Crop_Name||c.Crop_ID}`, sub: c.Cohort_ID});
-        }
-      }
-    });
-  });
-  calEvents.sort((a,b) => a.date - b.date);
+  // --- Upcoming Calendar Schedule (next 30 days): the propagation schedule feed (PropagationSchedule.gs) ---
+  const todayIso = (() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0') + '-' + String(n.getDate()).padStart(2,'0'); })();
+  const horizonIso = (() => { const n = new Date(Date.now() + 30*86400000); return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0') + '-' + String(n.getDate()).padStart(2,'0'); })();
+  const calDay = (iso) => { const p = String(iso).split('-'); const d = new Date(Number(p[0]), Number(p[1])-1, Number(p[2])); return isNaN(d) ? iso : d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}); };
+  const calEvents = (Array.isArray(DATA.PROPAGATION) ? DATA.PROPAGATION : []).filter(e => e.date >= todayIso && e.date <= horizonIso);
   $('calCount').textContent = calEvents.length;
   const calBody = $('calBody');
   if(calEvents.length === 0){
-    calBody.innerHTML = `<div class="empty">&#128197; Nothing scheduled in the next 30 days from available data.</div>`;
+    calBody.innerHTML = `<div class="empty">&#128197; Nothing scheduled in the next 30 days on the propagation calendar.</div>`;
   } else {
     calBody.innerHTML = `<div class="card-row">` + calEvents.slice(0,15).map(e => `
       <div class="item-card">
-        <div class="left"><b>${esc(e.label)}</b><div class="meta">${esc(e.sub)} · ${fmtDate(e.date)}</div></div>
+        <div class="left"><b>${esc(e.label)} — ${esc(e.cropName||e.cropId||'')}</b><div class="meta">${esc([e.batchId, e.cohortId, e.bedId].filter(Boolean).join(' · '))}${e.worker ? ' · ' + esc(userName(e.worker)) : ''} · ${esc(calDay(e.date))}</div></div>
       </div>`).join('') + `</div>`;
   }
 
@@ -415,9 +405,10 @@ function computeAll(){
         <td>${esc(userName(s.Worker_ID))}</td>
         <td>${esc(s.Bed_ID)}</td>
         <td>${esc(s.Activity_Name||'—')}</td>
-        <td><span class="pill ${verMap[s.Session_ID] ? 'verified' : (s.Status||'').toLowerCase()}">${esc(verMap[s.Session_ID] ? 'Verified' : (s.Status||'—'))}</span></td>
+        <td><span class="pill ${(s.Status||'').toLowerCase()}">${esc(s.Status||'—')}</span></td>
         <td>${fmtDate(s.Start_Time)}</td>
-        <td>${verMap[s.Session_ID] ? esc(fmtDT(verMap[s.Session_ID].Verified_Date)) + '<div class="meta">by ' + esc(userName(verMap[s.Session_ID].Verified_By)) + '</div>' : (String(s.Status||'').toUpperCase()==='COMPLETED' ? '<span class="meta">Waiting</span>' : '')}</td>
+        <td>${String(s.Status||'').toUpperCase()==='COMPLETED' && s.End_Time ? esc(fmtDT(s.End_Time)) : ''}</td>
+        <td>${verMap[s.Session_ID] ? `<span class="pill verified">Verified</span> ${esc(fmtDT(verMap[s.Session_ID].Verified_Date))}<div class="meta">by ${esc(userName(verMap[s.Session_ID].Verified_By))}</div>` : (String(s.Status||'').toUpperCase()==='COMPLETED' ? '<span class="meta">Awaiting verification</span>' : '')}</td>
       </tr>`.replace(/^/,'')).join('');
   }
 
