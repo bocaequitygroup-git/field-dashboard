@@ -64,6 +64,8 @@
   .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;}
   .pill.active{background:rgba(61,220,132,.15);color:var(--accent);}
   .pill.completed{background:rgba(74,157,224,.15);color:var(--blue);}
+  .pill.assigned{background:rgba(255,255,255,.08);color:var(--muted);}
+  .pill.paused{background:rgba(224,160,61,.15);color:#e0a03d;}
   .pill.scanned{background:rgba(255,255,255,.08);color:var(--muted);}
   .pill.open{background:rgba(224,85,61,.15);color:var(--danger);}
 
@@ -281,7 +283,7 @@ function computeAll(){
   const users = DATA.USERS || [];
   const cohortProd = DATA.COHORT_PRODUCTION || [];
 
-  const verMap = {}; (DATA.ACTIVITY_VERIFIED||[]).forEach(v => { if(v.Session_ID && v.Verified_By && v.Verified_Date) verMap[v.Session_ID] = v; });
+  const revMap = {}; (DATA.ACTIVITY_REVIEW||[]).forEach(v => { if(v.Session_ID) revMap[v.Session_ID] = v; });
   const fmtDT = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}); };
   const userName = (id) => {
     const u = users.find(u => (u.Worker_ID||'').toLowerCase() === String(id||'').toLowerCase());
@@ -392,7 +394,21 @@ function computeAll(){
   }
 
   // --- Worker Location Board ---
-  const recentSessions = sessions.slice().sort((a,b) => new Date(b.Start_Time||0) - new Date(a.Start_Time||0)).slice(0,20);
+  // Live work first (ASSIGNED / ACTIVE / PAUSED, never cut off), then the most recent finished sessions.
+  const isLive = (s) => ['ASSIGNED','ACTIVE','PAUSED'].indexOf(String(s.Status||'').toUpperCase()) !== -1;
+  const stamp = (s) => new Date(s.Start_Time || s.Assigned_Time || s.Scheduled_Date || 0);
+  const liveSessions = sessions.filter(isLive).sort((a,b) => stamp(b) - stamp(a));
+  const doneSessions = sessions.filter(s => !isLive(s)).sort((a,b) => new Date(b.End_Time||b.Start_Time||0) - new Date(a.End_Time||a.Start_Time||0)).slice(0,20);
+  const recentSessions = liveSessions.concat(doneSessions);
+  const reviewCell = (s) => {
+    if(String(s.Status||'').toUpperCase() !== 'COMPLETED') return '';
+    const r = revMap[s.Session_ID];
+    if(!r) return '<span class="meta">—</span>';
+    if(r.Verified_Date) return `<span class="pill verified">Verified</span> ${esc(fmtDT(r.Verified_Date))}<div class="meta">by ${esc(userName(r.Verified_By))}</div>`;
+    if(String(r.Governance_Class||'').toUpperCase() === 'CHECKED')
+      return r.Checked_Date ? `<span class="meta">Checked ${esc(fmtDT(r.Checked_Date))} by ${esc(userName(r.Checked_By))}</span>` : '<span class="meta">Checked-class: no sign-off needed</span>';
+    return '<span class="meta">Awaiting verification</span>';
+  };
   if(recentSessions.length === 0){
     $('workerTable').style.display = 'none';
     $('workerEmpty').style.display = 'block';
@@ -405,10 +421,10 @@ function computeAll(){
         <td>${esc(s.Bed_ID)}</td>
         <td>${esc(s.Activity_Name||'—')}</td>
         <td><span class="pill ${(s.Status||'').toLowerCase()}">${esc(s.Status||'—')}</span></td>
-        <td>${fmtDate(s.Start_Time)}</td>
+        <td>${s.Start_Time ? fmtDate(s.Start_Time) : (s.Assigned_Time ? 'Assigned ' + fmtDate(s.Assigned_Time) : '—')}</td>
         <td>${String(s.Status||'').toUpperCase()==='COMPLETED' && s.End_Time ? esc(fmtDT(s.End_Time)) : ''}</td>
-        <td>${verMap[s.Session_ID] ? `<span class="pill verified">Verified</span> ${esc(fmtDT(verMap[s.Session_ID].Verified_Date))}<div class="meta">by ${esc(userName(verMap[s.Session_ID].Verified_By))}</div>` : (String(s.Status||'').toUpperCase()==='COMPLETED' ? '<span class="meta">Awaiting verification</span>' : '')}</td>
-      </tr>`.replace(/^/,'')).join('');
+        <td>${reviewCell(s)}</td>
+      </tr>`).join('');
   }
 
   // --- Exceptions (Exception_Status = OPEN). Requires_Action is left blank by the engines, so it cannot be the filter. ---
@@ -433,8 +449,8 @@ function computeAll(){
   if(reassign.length === 0){
     reBody.innerHTML = `<div class="empty">No reassignments logged.</div>`;
   } else {
-    reBody.innerHTML = `<div class="card-row">` + reassign.slice(0,10).map(r => `
-      <div class="item-card"><div class="left"><b>${esc(r.Bed_ID||'')}</b><div class="meta">${esc(r.Notes||'')} · ${fmtDate(r.Timestamp)}</div></div></div>`).join('') + `</div>`;
+    reBody.innerHTML = `<div class="card-row">` + reassign.slice().sort((a,b) => new Date(b.End_Time||b.Start_Time||0) - new Date(a.End_Time||a.Start_Time||0)).slice(0,10).map(r => `
+      <div class="item-card"><div class="left"><b>${esc(r.Bed_ID||'')}</b><div class="meta">${esc(r.Notes||'')} · ${fmtDate(r.End_Time||r.Start_Time||r.Timestamp)}</div></div></div>`).join('') + `</div>`;
   }
 }
 
