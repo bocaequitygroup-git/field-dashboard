@@ -80,6 +80,15 @@
   .bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;align-items:center;}
   dialog{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:340px;width:90%;}
   dialog::backdrop{background:rgba(0,0,0,.6);}
+  .pill.verified{background:rgba(61,220,132,.2);color:var(--accent);}
+  #pvToast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:50;max-width:92%;padding:10px 16px;border-radius:10px;font-size:13px;display:none;box-shadow:0 4px 18px rgba(0,0,0,.45);}
+  #pvToast.work{display:block;background:var(--panel);color:var(--text);border:1px solid var(--accent);}
+  #pvToast.ok{display:block;background:var(--accent-dim);color:#fff;}
+  #pvToast.err{display:block;background:#7a2b1f;color:#fff;}
+  #pvBody.busy{pointer-events:none;opacity:.55;}
+  @keyframes pvspin{to{transform:rotate(360deg);}}
+  .pvspin{display:inline-block;width:11px;height:11px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:pvspin .7s linear infinite;vertical-align:-2px;margin-right:6px;}
+  #reasonDlg{max-width:420px;} #reasonDlg textarea{width:100%;min-height:80px;padding:8px;font-size:14px;font-family:inherit;background:var(--bg,#0f1511);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;}
   dialog label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;} dialog .inline-in{width:100%;padding:8px;font-size:14px;}
   .err{color:var(--danger);font-size:12px;margin-top:8px;min-height:16px;}
   footer{padding:16px 20px;text-align:center;font-size:11px;color:var(--muted);border-top:1px solid var(--border);}
@@ -186,7 +195,7 @@
         </div>
         <div class="panel-body">
           <table id="workerTable">
-            <thead><tr><th>Worker</th><th>Bed</th><th>Activity</th><th>Status</th><th>Last scan</th></tr></thead>
+            <thead><tr><th>Worker</th><th>Bed</th><th>Activity</th><th>Status</th><th>Last scan</th><th>Verified</th></tr></thead>
             <tbody id="workerBody"></tbody>
           </table>
           <div class="empty" id="workerEmpty" style="display:none;">No worker activity logged yet.</div>
@@ -223,6 +232,15 @@
   <div class="err" id="liErr"></div>
   <div class="bar"><button class="btn" id="liGo" type="button">Sign in</button><button class="btn secondary" type="button" onclick="$('loginDlg').close()">Cancel</button></div>
 </dialog>
+<dialog id="reasonDlg">
+  <h2 style="font-size:15px;margin:0 0 6px;">Explanation required</h2>
+  <div class="meta" id="rsMsg" style="font-size:12px;color:var(--muted);line-height:1.4;"></div>
+  <label for="rsText">Your explanation (at least 5 characters)</label>
+  <textarea id="rsText" maxlength="500"></textarea>
+  <div class="meta" id="rsCount" style="font-size:11px;color:var(--muted);margin-top:4px;">0 / 5 characters</div>
+  <div class="bar" style="margin-top:12px;"><button class="btn" id="rsGo" type="button" disabled>Submit and verify</button><button class="btn secondary" id="rsCancel" type="button">Cancel</button></div>
+</dialog>
+<div id="pvToast" role="status" aria-live="polite"></div>
 <footer id="sourceFooter">Source: live workbook feed. Sign in as a manager to verify.</footer>
 
 <script>
@@ -263,6 +281,8 @@ function computeAll(){
   const users = DATA.USERS || [];
   const cohortProd = DATA.COHORT_PRODUCTION || [];
 
+  const verMap = {}; (DATA.ACTIVITY_VERIFIED||[]).forEach(v => { if(v.Session_ID && v.Verified_By && v.Verified_Date) verMap[v.Session_ID] = v; });
+  const fmtDT = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}); };
   const userName = (id) => {
     const u = users.find(u => (u.Worker_ID||'').toLowerCase() === String(id||'').toLowerCase());
     return u ? u.Name : (id || 'Unknown');
@@ -395,9 +415,10 @@ function computeAll(){
         <td>${esc(userName(s.Worker_ID))}</td>
         <td>${esc(s.Bed_ID)}</td>
         <td>${esc(s.Activity_Name||'—')}</td>
-        <td><span class="pill ${(s.Status||'').toLowerCase()}">${esc(s.Status||'—')}</span></td>
+        <td><span class="pill ${verMap[s.Session_ID] ? 'verified' : (s.Status||'').toLowerCase()}">${esc(verMap[s.Session_ID] ? 'Verified' : (s.Status||'—'))}</span></td>
         <td>${fmtDate(s.Start_Time)}</td>
-      </tr>`).join('');
+        <td>${verMap[s.Session_ID] ? esc(fmtDT(verMap[s.Session_ID].Verified_Date)) + '<div class="meta">by ' + esc(userName(verMap[s.Session_ID].Verified_By)) + '</div>' : (String(s.Status||'').toUpperCase()==='COMPLETED' ? '<span class="meta">Waiting</span>' : '')}</td>
+      </tr>`.replace(/^/,'')).join('');
   }
 
   // --- Exceptions (Exception_Status = OPEN). Requires_Action is left blank by the engines, so it cannot be the filter. ---
@@ -447,7 +468,7 @@ async function api(action, payload, timeoutMs){
     const json = JSON.parse(await res.text());
     if(json && json.ok===false){
       if(['UNAUTHENTICATED','ROLE_NOT_ALLOWED'].includes(String(json.code))) signOut(json.error);
-      const err = new Error(json.error || 'The request failed.'); err.code = String(json.code || ''); throw err;
+      const err = new Error(json.error || 'The request failed.'); err.code = String(json.code||''); throw err;
     }
     return json.data!==undefined ? json.data : json;
   } finally { clearTimeout(timer); }
@@ -549,54 +570,88 @@ function renderPending(){
 function pvTog(k,on){ if(on) PV.sel[k]=true; else delete PV.sel[k]; const n=pendingActivities().filter(x=>PV.sel[x.key]).length, b=$('pvGo'); if(b){ b.disabled=!n; b.textContent=n?'Verify selected ('+n+')':'Verify selected'; } }
 function pvAll(on){ PV.sel={}; if(on) pendingActivities().forEach(x=>{PV.sel[x.key]=true;}); renderPending(); }
 async function pvRefresh(){ await Promise.all([loadFeed(), loadToday()]); }
-async function pvRun(fn, okMsg){
-  if(PV.busy) return; PV.busy=true;
-  try{ await fn(); $('syncLabel').textContent = okMsg; } catch(e){ alert(e.message); }
-  PV.busy=false; PV.sel={}; await pvRefresh();
+let pvToastTimer=null;
+function pvProgress(kind, msg, ms){
+  const t=$('pvToast'); clearTimeout(pvToastTimer);
+  if(!msg){ t.className=''; t.textContent=''; return; }
+  t.className=kind; t.innerHTML=(kind==='work'?'<span class="pvspin"></span>':kind==='ok'?'\u2713 ':'\u26A0 ')+esc(msg);
+  if(ms) pvToastTimer=setTimeout(()=>{ t.className=''; }, ms);
+}
+function pvSetBusy(on){ PV.busy=on; const b=$('pvBody'); if(b) b.classList.toggle('busy', on); }
+async function pvRun(fn, okMsg, workMsg){
+  if(PV.busy) return false; pvSetBusy(true);
+  pvProgress('work', workMsg||'Verifying\u2026'); $('syncLabel').textContent = workMsg||'Verifying\u2026';
+  let ok=false, out=null;
+  try{ out = await fn(); ok=true; } catch(e){ pvProgress('err', e.message, 9000); $('syncLabel').textContent='Verification failed'; }
+  PV.sel={};
+  if(ok){ pvProgress('work','Saved. Refreshing\u2026'); }
+  try{ await pvRefresh(); }catch(e){}
+  pvSetBusy(false);
+  if(ok){ const m='Verification completed \u2014 '+(typeof okMsg==='function'?okMsg(out):okMsg); pvProgress('ok', m, 7000); $('syncLabel').textContent = m; }
+  return ok;
+}
+/* Asks for a written explanation in a real box (not a dead-end alert). Resolves to the text, or null if cancelled. */
+function pvAskReason(message){
+  return new Promise(resolve=>{
+    const d=$('reasonDlg'), t=$('rsText'), go=$('rsGo'), cnt=$('rsCount'); let done=false;
+    $('rsMsg').textContent=message||''; t.value=''; cnt.textContent='0 / 5 characters'; go.disabled=true;
+    const fin=v=>{ if(done) return; done=true; t.oninput=null; go.onclick=null; $('rsCancel').onclick=null; d.onclose=null; if(d.open) d.close(); resolve(v); };
+    t.oninput=()=>{ const n=t.value.trim().length; go.disabled=n<5; cnt.textContent=n+' / 5 characters'; };
+    go.onclick=()=>{ const v=t.value.trim(); if(v.length>=5) fin(v); };
+    $('rsCancel').onclick=()=>fin(null); d.onclose=()=>fin(null);
+    d.showModal(); t.focus();
+  });
 }
 function pvVerify(){
   if(needAuth()) return;
   const items = pendingActivities().filter(x=>PV.sel[x.key]); if(!items.length) return;
   if(!confirm('Verify '+items.length+' completed '+(items.length===1?'activity':'activities')+'?\n\n'+items.map(x=>x.bed.id+'  '+actInfo(x.step.name).label).join('\n')+'\n\nThis is logged with your name and the time. It does not release any bed.')) return;
-  pvRun(()=>api('verify-items',{items:items.map(x=>({bedId:x.bed.id, activity:x.step.name}))}), items.length+' verified');
+  pvRun(()=>api('verify-items',{items:items.map(x=>({bedId:x.bed.id, activity:x.step.name}))}), items.length+(items.length===1?' activity':' activities')+' verified', 'Verifying '+items.length+' '+(items.length===1?'activity':'activities')+'…');
 }
 async function pvPlant(cohortId){
-  if(needAuth()) return;
+  if(needAuth() || PV.busy) return;
   const el=$('dob_'+cohortId), dob=el&&el.value; if(!dob){ alert('Choose the planting date.'); return; }
   if(!confirm('Verify planting of '+cohortId+' on '+dob+'? This starts the crop clock and irrigation schedule.')) return;
-  if(PV.busy) return; PV.busy=true;
-  // The server may ask for a written explanation before it accepts the date:
-  //   PLANTING_OUTSIDE_WINDOW / REASON_REQUIRED -> windowOverrideReason (date is outside the crop's allowable planting window)
-  //   DEVIATION_REASON_REQUIRED                 -> deviationReason      (date differs from the planned date, inside the window)
-  const extra = {}; let stopped = false;
-  try{
-    for(let attempt=0; attempt<4; attempt++){
-      try{
-        await api('verify-planting', Object.assign({cohortId, actualDob:dob}, extra));
-        $('syncLabel').textContent = 'Planting verified'; break;
-      }catch(e){
-        const field = (e.code==='PLANTING_OUTSIDE_WINDOW' || e.code==='REASON_REQUIRED') ? 'windowOverrideReason'
-                    : e.code==='DEVIATION_REASON_REQUIRED' ? 'deviationReason' : '';
-        if(!field || attempt===3) throw e;
-        const why = prompt(e.message+'\n\nTo accept this planting date, type your explanation (at least 5 characters). Press Cancel to stop.', extra[field]||'');
-        if(why===null){ stopped = true; break; }
-        extra[field] = why.trim();
-      }
+  let windowReason='', devReason='', askedWin=false, askedDev=false;
+  for(let i=0;i<4;i++){
+    const body={cohortId, actualDob:dob};
+    if(windowReason) body.windowOverrideReason=windowReason;
+    if(devReason) body.deviationReason=devReason;
+    let res=null, err=null;
+    pvSetBusy(true); pvProgress('work','Verifying planting of '+cohortId+'\u2026'); $('syncLabel').textContent='Verifying planting of '+cohortId+'\u2026';
+    try{ res=await api('verify-planting', body); }catch(e){ err=e; }
+    if(!err){
+      pvProgress('work','Saved. Refreshing\u2026'); PV.sel={};
+      try{ await pvRefresh(); }catch(e){}
+      pvSetBusy(false);
+      const dv=res&&res.plantingDeviation, h=dv&&dv.harvest;
+      let m='Verification completed \u2014 planting of '+cohortId+' verified on '+dob+'.';
+      if(dv&&h) m+=' Harvest window moved '+(h.shiftDays>0?'+':'')+h.shiftDays+' day'+(Math.abs(h.shiftDays)===1?'':'s')+' ('+h.earliest+' \u2192 '+h.latest+').';
+      if(res&&res.plantingDeviationWarning) m+=' '+res.plantingDeviationWarning;
+      pvProgress('ok', m, 9000); $('syncLabel').textContent=m; return;
     }
-  }catch(e){ alert(e.message); }
-  PV.busy=false; PV.sel={};
-  if(!stopped) await pvRefresh();
+    pvSetBusy(false); pvProgress('', '');
+    const code=String(err.code||''), msg=String(err.message||'');
+    const needDev = code==='DEVIATION_REASON_REQUIRED';
+    const needWin = !needDev && /allowable|planting window|accept this planting date/i.test(msg);
+    if((needDev && !askedDev) || (needWin && !askedWin)){
+      const r=await pvAskReason(msg); if(r===null){ $('syncLabel').textContent='Verification cancelled'; return; }
+      if(needDev){ devReason=r; askedDev=true; } else { windowReason=r; askedWin=true; }
+      continue;
+    }
+    pvProgress('err', msg, 10000); $('syncLabel').textContent='Verification failed'; return;
+  }
 }
 function pvBed(bedId){
   if(needAuth()) return;
   if(!bedId){ alert('Enter a bed ID.'); return; }
   if(!confirm('Verify '+bedId+' is physically ready for production? It becomes Available and can be planted.')) return;
-  pvRun(()=>api('verify-bed-ready',{bedId}), 'Bed verified ready');
+  pvRun(()=>api('verify-bed-ready',{bedId}), 'bed '+bedId+' verified ready', 'Verifying bed '+bedId+'…');
 }
 function pvRelease(scope,bedId){
   if(needAuth()) return;
   if(!confirm('Verify '+bedId+' ready and release it to Available? Any completed activities still waiting are signed off with it.')) return;
-  pvRun(()=> String(scope).indexOf('BED:')===0 ? api('verify-bed-ready',{bedId,requireVerified:true,verifyAll:true}) : api('complete-cohort',{cohortId:scope,requireVerified:true,verifyAll:true}), 'Bed verified ready');
+  pvRun(()=> String(scope).indexOf('BED:')===0 ? api('verify-bed-ready',{bedId,requireVerified:true,verifyAll:true}) : api('complete-cohort',{cohortId:scope,requireVerified:true,verifyAll:true}), 'bed '+bedId+' verified ready', 'Verifying bed '+bedId+'…');
 }
 
 // ============================================================
