@@ -363,15 +363,14 @@ function computeAll(){
       </div>`).join('') + `</div>`;
   }
 
-  // --- Upcoming Calendar Schedule (next 30 days): the propagation schedule feed (PropagationSchedule.gs) ---
+  // --- Upcoming Calendar Schedule: every upcoming event the propagation schedule feed carries (PropagationSchedule.gs: today through 120 days ahead) ---
   const todayIso = (() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0') + '-' + String(n.getDate()).padStart(2,'0'); })();
-  const horizonIso = (() => { const n = new Date(Date.now() + 30*86400000); return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0') + '-' + String(n.getDate()).padStart(2,'0'); })();
   const calDay = (iso) => { const p = String(iso).split('-'); const d = new Date(Number(p[0]), Number(p[1])-1, Number(p[2])); return isNaN(d) ? iso : d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}); };
-  const calEvents = (Array.isArray(DATA.PROPAGATION) ? DATA.PROPAGATION : []).filter(e => e.date >= todayIso && e.date <= horizonIso);
+  const calEvents = (Array.isArray(DATA.PROPAGATION) ? DATA.PROPAGATION : []).filter(e => e.date >= todayIso);
   $('calCount').textContent = calEvents.length;
   const calBody = $('calBody');
   if(calEvents.length === 0){
-    calBody.innerHTML = `<div class="empty">&#128197; Nothing scheduled in the next 30 days on the propagation calendar.</div>`;
+    calBody.innerHTML = `<div class="empty">&#128197; Nothing scheduled in the next 120 days on the propagation calendar.</div>`;
   } else {
     calBody.innerHTML = `<div class="card-row">` + calEvents.slice(0,15).map(e => `
       <div class="item-card">
