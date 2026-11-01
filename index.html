@@ -618,11 +618,12 @@ async function pvPlant(cohortId){
   if(needAuth() || PV.busy) return;
   const el=$('dob_'+cohortId), dob=el&&el.value; if(!dob){ alert('Choose the planting date.'); return; }
   if(!confirm('Verify planting of '+cohortId+' on '+dob+'? This starts the crop clock and irrigation schedule.')) return;
-  let windowReason='', devReason='', askedWin=false, askedDev=false;
-  for(let i=0;i<4;i++){
+  let windowReason='', devReason='', propReason='', askedWin=false, askedDev=false, askedProp=false;
+  for(let i=0;i<5;i++){
     const body={cohortId, actualDob:dob};
     if(windowReason) body.windowOverrideReason=windowReason;
     if(devReason) body.deviationReason=devReason;
+    if(propReason) body.propagationOverrideReason=propReason;
     let res=null, err=null;
     pvSetBusy(true); pvProgress('work','Verifying planting of '+cohortId+'\u2026'); $('syncLabel').textContent='Verifying planting of '+cohortId+'\u2026';
     try{ res=await api('verify-planting', body); }catch(e){ err=e; }
@@ -638,11 +639,12 @@ async function pvPlant(cohortId){
     }
     pvSetBusy(false); pvProgress('', '');
     const code=String(err.code||''), msg=String(err.message||'');
+    const needProp = code==='PROPAGATION_NOT_VERIFIED';   /* nursery sign-off (R01) missing: the manager may plant anyway with a written reason */
     const needDev = code==='DEVIATION_REASON_REQUIRED';
-    const needWin = !needDev && /allowable|planting window|accept this planting date/i.test(msg);
-    if((needDev && !askedDev) || (needWin && !askedWin)){
+    const needWin = !needProp && !needDev && /allowable|planting window|accept this planting date/i.test(msg);
+    if((needProp && !askedProp) || (needDev && !askedDev) || (needWin && !askedWin)){
       const r=await pvAskReason(msg); if(r===null){ $('syncLabel').textContent='Verification cancelled'; return; }
-      if(needDev){ devReason=r; askedDev=true; } else { windowReason=r; askedWin=true; }
+      if(needProp){ propReason=r; askedProp=true; } else if(needDev){ devReason=r; askedDev=true; } else { windowReason=r; askedWin=true; }
       continue;
     }
     pvProgress('err', msg, 10000); $('syncLabel').textContent='Verification failed'; return;
