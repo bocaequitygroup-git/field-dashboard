@@ -447,7 +447,7 @@ async function api(action, payload, timeoutMs){
     const json = JSON.parse(await res.text());
     if(json && json.ok===false){
       if(['UNAUTHENTICATED','ROLE_NOT_ALLOWED'].includes(String(json.code))) signOut(json.error);
-      throw new Error(json.error || 'The request failed.');
+      const err = new Error(json.error || 'The request failed.'); err.code = String(json.code || ''); throw err;
     }
     return json.data!==undefined ? json.data : json;
   } finally { clearTimeout(timer); }
@@ -560,11 +560,32 @@ function pvVerify(){
   if(!confirm('Verify '+items.length+' completed '+(items.length===1?'activity':'activities')+'?\n\n'+items.map(x=>x.bed.id+'  '+actInfo(x.step.name).label).join('\n')+'\n\nThis is logged with your name and the time. It does not release any bed.')) return;
   pvRun(()=>api('verify-items',{items:items.map(x=>({bedId:x.bed.id, activity:x.step.name}))}), items.length+' verified');
 }
-function pvPlant(cohortId){
+async function pvPlant(cohortId){
   if(needAuth()) return;
   const el=$('dob_'+cohortId), dob=el&&el.value; if(!dob){ alert('Choose the planting date.'); return; }
   if(!confirm('Verify planting of '+cohortId+' on '+dob+'? This starts the crop clock and irrigation schedule.')) return;
-  pvRun(()=>api('verify-planting',{cohortId, actualDob:dob}), 'Planting verified');
+  if(PV.busy) return; PV.busy=true;
+  // The server may ask for a written explanation before it accepts the date:
+  //   PLANTING_OUTSIDE_WINDOW / REASON_REQUIRED -> windowOverrideReason (date is outside the crop's allowable planting window)
+  //   DEVIATION_REASON_REQUIRED                 -> deviationReason      (date differs from the planned date, inside the window)
+  const extra = {}; let stopped = false;
+  try{
+    for(let attempt=0; attempt<4; attempt++){
+      try{
+        await api('verify-planting', Object.assign({cohortId, actualDob:dob}, extra));
+        $('syncLabel').textContent = 'Planting verified'; break;
+      }catch(e){
+        const field = (e.code==='PLANTING_OUTSIDE_WINDOW' || e.code==='REASON_REQUIRED') ? 'windowOverrideReason'
+                    : e.code==='DEVIATION_REASON_REQUIRED' ? 'deviationReason' : '';
+        if(!field || attempt===3) throw e;
+        const why = prompt(e.message+'\n\nTo accept this planting date, type your explanation (at least 5 characters). Press Cancel to stop.', extra[field]||'');
+        if(why===null){ stopped = true; break; }
+        extra[field] = why.trim();
+      }
+    }
+  }catch(e){ alert(e.message); }
+  PV.busy=false; PV.sel={};
+  if(!stopped) await pvRefresh();
 }
 function pvBed(bedId){
   if(needAuth()) return;
