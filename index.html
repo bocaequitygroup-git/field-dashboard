@@ -35,6 +35,7 @@
 
   main{padding:20px;max-width:1400px;margin:0 auto;}
   .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;}
+  .kpi-grid .kpi.wide{grid-column:1/-1;}
   @media(max-width:800px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}
   .kpi{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;}
   .kpi .label{font-size:12px;color:var(--muted);}
@@ -46,6 +47,33 @@
 
   .panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
   @media(max-width:900px){.panel-grid{grid-template-columns:1fr;}}
+  .panel-grid > .panel, .panel-grid > .stack > .panel{margin-bottom:0;}
+  .stack{display:grid;gap:16px;align-content:start;}
+
+  /* Desktop: everything fits one screen. KPIs become one strip, the six panel areas share the remaining height,
+     and each panel scrolls inside itself, so the page never needs to scroll. Smaller screens keep the stacked layout. */
+  @media (min-width:1100px) and (min-height:620px){
+    html,body{height:100%;}
+    body{display:flex;flex-direction:column;overflow:hidden;}
+    header.topbar{padding:8px 16px;}
+    main{flex:1;min-height:0;width:100%;max-width:none;padding:10px 14px;display:flex;flex-direction:column;gap:10px;}
+    footer{padding:5px 14px;}
+    .kpi-grid{grid-template-columns:repeat(4,minmax(110px,1fr)) minmax(300px,2.6fr);gap:10px;margin:0;}
+    .kpi-grid .kpi.wide{grid-column:auto;}
+    .kpi{padding:8px 12px;}
+    .kpi .value{font-size:22px;margin-top:2px;}
+    .kpi .meta{font-size:11px;}
+    .lb-row{gap:22px;flex-wrap:nowrap;}
+    .lb-row .value{font-size:20px;}
+    .panel-grid{flex:1;min-height:0;grid-template-columns:1.05fr 1fr 1.15fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:10px;}
+    .panel-grid > .panel, .panel-grid > .stack > .panel{display:flex;flex-direction:column;min-height:0;}
+    .stack{grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:10px;min-height:0;}
+    .panel-head{padding:7px 12px;flex:none;}
+    .panel-head .count{font-size:16px;}
+    .panel-body{padding:8px 12px;flex:1;min-height:0;overflow:auto;}
+    .panel-head .desc{display:none;}
+    #workerTable{min-width:520px;}
+  }
   .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;margin-bottom:16px;overflow:hidden;}
   .panel-head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;}
   .panel-head .icon{font-size:16px;}
@@ -146,82 +174,80 @@
   </div>
 
   <div class="panel-grid">
-    <div>
-      <div class="panel">
-        <div class="panel-head">
-          <span class="icon">&#128209;</span>
-          <div class="titles"><h2>Pending Field Verification</h2><div class="desc">Activities done by workers · plantings · beds to release</div></div>
-          <div class="count" id="pvCount">0</div>
-        </div>
-        <div class="panel-body" id="pvBody"></div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="icon">&#128209;</span>
+        <div class="titles"><h2>Pending Field Verification</h2><div class="desc">Activities done by workers · plantings · beds to release</div></div>
+        <div class="count" id="pvCount">0</div>
       </div>
+      <div class="panel-body" id="pvBody"></div>
+    </div>
 
-      <div class="panel">
-        <div class="panel-head">
-          <span class="icon">&#127793;</span>
-          <div class="titles"><h2>Active Lifecycle Cards</h2><div class="desc">Verified beds · DOB-anchored</div></div>
-          <div class="count" id="alcCount">0</div>
-        </div>
-        <div class="panel-body" id="alcBody"></div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="icon">&#127793;</span>
+        <div class="titles"><h2>Active Lifecycle Cards</h2><div class="desc">Verified beds · DOB-anchored</div></div>
+        <div class="count" id="alcCount">0</div>
       </div>
+      <div class="panel-body" id="alcBody"></div>
+    </div>
 
-      <div class="panel">
-        <div class="panel-head">
-          <span class="icon">&#128197;</span>
-          <div class="titles"><h2>Upcoming Calendar Schedule</h2><div class="desc">Propagation schedule · transplant · harvest</div></div>
-          <div class="count" id="calCount">0</div>
-        </div>
-        <div class="panel-body">
-          <div id="calBody"></div>
-          <div class="note">Read from the propagation schedule: scheduled propagation tasks, batch start and transplant-ready dates, each unplanted cohort's propagation plan, and harvest windows opening.</div>
-        </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="icon">&#128197;</span>
+        <div class="titles"><h2>Upcoming Calendar Schedule</h2><div class="desc">Propagation schedule · transplant · harvest</div></div>
+        <div class="count" id="calCount">0</div>
+      </div>
+      <div class="panel-body">
+        <div id="calBody"></div>
+        <div class="note">Read from the propagation schedule: scheduled propagation tasks, batch start and transplant-ready dates, each unplanted cohort's propagation plan, and harvest windows opening.</div>
       </div>
     </div>
 
-    <div>
-      <div class="panel">
-        <div class="panel-head">
-          <span class="icon">&#128737;</span>
-          <div class="titles"><h2>Crop Watchguard</h2><div class="desc">Routine scouting feed</div></div>
-        </div>
-        <div class="panel-body">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Cadence: every 7 days during growth · <span id="scoutSummary">no scout findings logged yet</span>.</div>
-          <div id="scoutBody"></div>
-        </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="icon">&#128737;</span>
+        <div class="titles"><h2>Crop Watchguard</h2><div class="desc">Routine scouting feed</div></div>
       </div>
+      <div class="panel-body">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Cadence: every 7 days during growth · <span id="scoutSummary">no scout findings logged yet</span>.</div>
+        <div id="scoutBody"></div>
+      </div>
+    </div>
 
-      <div class="panel">
-        <div class="panel-head">
-          <span class="icon">&#128119;</span>
-          <div class="titles"><h2>Worker Location Board</h2><div class="desc">Last validated scan</div></div>
-        </div>
-        <div class="panel-body">
-          <table id="workerTable">
-            <thead><tr><th>Worker</th><th>Bed</th><th>Activity</th><th>Status</th><th>Started</th><th>Completed</th><th>Verified</th></tr></thead>
-            <tbody id="workerBody"></tbody>
-          </table>
-          <div class="empty" id="workerEmpty" style="display:none;">No worker activity logged yet.</div>
-        </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="icon">&#128119;</span>
+        <div class="titles"><h2>Worker Location Board</h2><div class="desc">Last validated scan</div></div>
       </div>
+      <div class="panel-body">
+        <table id="workerTable">
+          <thead><tr><th>Worker</th><th>Bed</th><th>Activity</th><th>Status</th><th>Started</th><th>Completed</th><th>Verified</th></tr></thead>
+          <tbody id="workerBody"></tbody>
+        </table>
+        <div class="empty" id="workerEmpty" style="display:none;">No worker activity logged yet.</div>
+      </div>
+    </div>
 
-      <div class="panel">
-        <div class="panel-head">
-          <span class="icon">&#9888;</span>
-          <div class="titles"><h2>Exception Overrides</h2><div class="desc">Open exceptions · manager resolves with a note</div></div>
-          <div class="count" id="exoCount">0</div>
-        </div>
-        <div class="panel-body" id="exoBody"></div>
+    <div class="stack">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="icon">&#9888;</span>
+        <div class="titles"><h2>Exception Overrides</h2><div class="desc">Open exceptions · manager resolves with a note</div></div>
+        <div class="count" id="exoCount">0</div>
       </div>
+      <div class="panel-body" id="exoBody"></div>
+    </div>
 
-      <div class="panel">
-        <div class="panel-head">
-          <span class="icon">&#128260;</span>
-          <div class="titles"><h2>Recent Reassignments</h2><div class="desc">Manager-initiated handoffs</div></div>
-        </div>
-        <div class="panel-body" id="reassignBody">
-          <div class="empty">No reassignments logged.</div>
-        </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="icon">&#128260;</span>
+        <div class="titles"><h2>Recent Reassignments</h2><div class="desc">Manager-initiated handoffs</div></div>
       </div>
+      <div class="panel-body" id="reassignBody">
+        <div class="empty">No reassignments logged.</div>
+      </div>
+    </div>
     </div>
   </div>
 </main>
