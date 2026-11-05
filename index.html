@@ -80,6 +80,13 @@
   .panel-head .titles{flex:1;}
   .panel-head h2{font-size:14px;margin:0;}
   .panel-head .desc{font-size:11px;color:var(--muted);margin-top:2px;}
+  .panel-head.hasfilter{flex-wrap:wrap;}
+  .dfilter{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:11px;color:var(--muted);width:100%;margin-top:2px;}
+  .dfilter input[type=date]{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:3px 5px;font-size:11px;font-family:inherit;color-scheme:dark light;}
+  .dfilter button{background:none;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:3px 7px;font-size:11px;cursor:pointer;font-family:inherit;}
+  .dfilter button:hover{border-color:var(--accent);}
+  .dfilter .dfnote{margin-left:auto;}
+  .dfilter.on input[type=date]{border-color:var(--accent);}
   .panel-head .count{font-size:20px;font-weight:700;}
   .panel-body{padding:14px 16px;font-size:13px;}
   .empty{color:var(--muted);font-size:12px;padding:10px 0;display:flex;gap:8px;align-items:flex-start;}
@@ -216,9 +223,10 @@
     </div>
 
     <div class="panel">
-      <div class="panel-head">
+      <div class="panel-head hasfilter">
         <span class="icon">&#128119;</span>
         <div class="titles"><h2>Worker Location Board</h2><div class="desc">Last validated scan</div></div>
+        <div class="dfilter" data-ds="worker"><label>From <input type="date" data-k="worker" data-end="from" aria-label="From date"></label><label>To <input type="date" data-k="worker" data-end="to" aria-label="To date"></label><button type="button" data-k="worker" data-q="today">Today</button><button type="button" data-k="worker" data-q="7">7 days</button><button type="button" data-k="worker" data-q="30">30 days</button><button type="button" data-k="worker" data-q="clear">All dates</button><span class="dfnote" id="dfn-worker"></span></div>
       </div>
       <div class="panel-body">
         <table id="workerTable">
@@ -231,18 +239,20 @@
 
     <div class="stack">
     <div class="panel">
-      <div class="panel-head">
+      <div class="panel-head hasfilter">
         <span class="icon">&#9888;</span>
         <div class="titles"><h2>Exception Overrides</h2><div class="desc">Open exceptions · manager resolves with a note</div></div>
         <div class="count" id="exoCount">0</div>
+        <div class="dfilter" data-ds="exc"><label>From <input type="date" data-k="exc" data-end="from" aria-label="From date"></label><label>To <input type="date" data-k="exc" data-end="to" aria-label="To date"></label><button type="button" data-k="exc" data-q="today">Today</button><button type="button" data-k="exc" data-q="7">7 days</button><button type="button" data-k="exc" data-q="30">30 days</button><button type="button" data-k="exc" data-q="clear">All dates</button><span class="dfnote" id="dfn-exc"></span></div>
       </div>
       <div class="panel-body" id="exoBody"></div>
     </div>
 
     <div class="panel">
-      <div class="panel-head">
+      <div class="panel-head hasfilter">
         <span class="icon">&#128260;</span>
         <div class="titles"><h2>Recent Reassignments</h2><div class="desc">Manager-initiated handoffs</div></div>
+        <div class="dfilter" data-ds="reassign"><label>From <input type="date" data-k="reassign" data-end="from" aria-label="From date"></label><label>To <input type="date" data-k="reassign" data-end="to" aria-label="To date"></label><button type="button" data-k="reassign" data-q="today">Today</button><button type="button" data-k="reassign" data-q="7">7 days</button><button type="button" data-k="reassign" data-q="30">30 days</button><button type="button" data-k="reassign" data-q="clear">All dates</button><span class="dfnote" id="dfn-reassign"></span></div>
       </div>
       <div class="panel-body" id="reassignBody">
         <div class="empty">No reassignments logged.</div>
@@ -300,6 +310,43 @@ function esc(s){ return (s===undefined||s===null) ? '' : String(s).replace(/[&<>
 // ============================================================
 /* Server snapshot (VerificationSnapshot.gs): signed-in = full detail from get-manager-today-view, signed-out = counts from the public feed. Same numbers either way. */
 function vsNow(){ return (TODAY && TODAY.verification) || DATA.VERIFICATION || null; }
+
+/* ----- Date filters: Worker Location Board, Exception Overrides, Recent Reassignments (each has its own range) -----
+   A range is whole local days, both ends inclusive; a blank end is open. No range = the panel behaves exactly as before. */
+const DF_KEY = 'vpos_dashboard_datefilters';
+const DF = { worker:{from:'',to:''}, exc:{from:'',to:''}, reassign:{from:'',to:''} };
+try{ const o = JSON.parse(sessionStorage.getItem(DF_KEY)||'null'); if(o) Object.keys(DF).forEach(k => { if(o[k]) DF[k] = { from:String(o[k].from||''), to:String(o[k].to||'') }; }); }catch(e){}
+function dfSave(){ try{ sessionStorage.setItem(DF_KEY, JSON.stringify(DF)); }catch(e){} }
+function dfActive(k){ return !!(DF[k].from || DF[k].to); }
+function dfIn(k, v){
+  if(!dfActive(k)) return true;
+  const d = new Date(v); if(isNaN(d)) return false;          // no usable date: cannot be placed in a range
+  let a = DF[k].from, b = DF[k].to; if(a && b && a > b){ const t = a; a = b; b = t; }   // tolerate a reversed range
+  if(a && d < new Date(a + 'T00:00:00')) return false;
+  if(b && d > new Date(b + 'T23:59:59.999')) return false;
+  return true;
+}
+function dfIso(d){ const p = (n) => String(n).padStart(2,'0'); return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()); }
+function dfSyncControls(){
+  Object.keys(DF).forEach(k => {
+    document.querySelectorAll('.dfilter[data-ds="'+k+'"] input[type=date]').forEach(i => { i.value = DF[k][i.dataset.end] || ''; });
+    const bar = document.querySelector('.dfilter[data-ds="'+k+'"]'); if(bar) bar.classList.toggle('on', dfActive(k));
+  });
+}
+function dfNote(k, shown, total){ const el = $('dfn-' + k); if(el) el.textContent = dfActive(k) ? shown + ' of ' + total + ' in range' : ''; }
+function dfWire(){
+  document.querySelectorAll('.dfilter').forEach(bar => {
+    bar.addEventListener('change', (ev) => { const i = ev.target; if(!i.dataset || !i.dataset.end) return; DF[i.dataset.k][i.dataset.end] = i.value || ''; dfSave(); dfSyncControls(); if(DATA.BED_MASTER) computeAll(); });
+    bar.addEventListener('click', (ev) => {
+      const b = ev.target.closest('button[data-q]'); if(!b) return;
+      const k = b.dataset.k, q = b.dataset.q, today = new Date();
+      if(q === 'clear') DF[k] = { from:'', to:'' };
+      else { const from = new Date(today); from.setDate(from.getDate() - (q === 'today' ? 0 : Number(q) - 1)); DF[k] = { from:dfIso(from), to:dfIso(today) }; }
+      dfSave(); dfSyncControls(); if(DATA.BED_MASTER) computeAll();
+    });
+  });
+  dfSyncControls();
+}
 function computeAll(){
   const beds = DATA.BED_MASTER || [];
   const caq = DATA.COHORT_ASSIGNMENT_QUEUE || [];
@@ -423,8 +470,13 @@ function computeAll(){
   // Live work first (ASSIGNED / ACTIVE / PAUSED, never cut off), then the most recent finished sessions.
   const isLive = (s) => ['ASSIGNED','ACTIVE','PAUSED'].indexOf(String(s.Status||'').toUpperCase()) !== -1;
   const stamp = (s) => new Date(s.Start_Time || s.Assigned_Time || s.Scheduled_Date || 0);
-  const liveSessions = sessions.filter(isLive).sort((a,b) => stamp(b) - stamp(a));
-  const doneSessions = sessions.filter(s => !isLive(s)).sort((a,b) => new Date(b.End_Time||b.Start_Time||0) - new Date(a.End_Time||a.Start_Time||0)).slice(0,20);
+  // Date filter: a live session is placed by when it started (or was assigned / scheduled), a finished one by when it ended.
+  const wDate = (s) => isLive(s) ? (s.Start_Time || s.Assigned_Time || s.Scheduled_Date) : (s.End_Time || s.Start_Time || s.Assigned_Time);
+  const wAll = sessions.filter(s => String(s.Session_ID||s.Worker_ID||s.Bed_ID||'').trim() !== '');
+  const wIn = wAll.filter(s => dfIn('worker', wDate(s)));
+  dfNote('worker', wIn.length, wAll.length);
+  const liveSessions = wIn.filter(isLive).sort((a,b) => stamp(b) - stamp(a));
+  const doneSessions = wIn.filter(s => !isLive(s)).sort((a,b) => new Date(b.End_Time||b.Start_Time||0) - new Date(a.End_Time||a.Start_Time||0)).slice(0, dfActive('worker') ? 1000 : 20);   // a chosen range shows everything in it
   const recentSessions = liveSessions.concat(doneSessions);
   const reviewCell = (s) => {
     if(String(s.Status||'').toUpperCase() !== 'COMPLETED') return '';
@@ -438,6 +490,7 @@ function computeAll(){
   if(recentSessions.length === 0){
     $('workerTable').style.display = 'none';
     $('workerEmpty').style.display = 'block';
+    $('workerEmpty').textContent = dfActive('worker') ? 'No worker activity in this date range.' : 'No worker activity logged yet.';
   } else {
     $('workerTable').style.display = 'table';
     $('workerEmpty').style.display = 'none';
@@ -454,12 +507,13 @@ function computeAll(){
   }
 
   // --- Exceptions (Exception_Status = OPEN). Requires_Action is left blank by the engines, so it cannot be the filter. ---
-  const overrides = openExceptions;
+  const overrides = openExceptions.filter(e => dfIn('exc', e.Exception_Date || e.Timestamp));   // the KPI tile above stays the unfiltered open total
+  dfNote('exc', overrides.length, openExceptions.length);
   $('exoCount').textContent = overrides.length;
   const exoBody = $('exoBody');
   const disE = ' disabled title="Verify and resolve in the manager app"';
   if(overrides.length === 0){
-    exoBody.innerHTML = `<div class="empty" style="color:var(--accent);">&#9989; No open exceptions.</div>`;
+    exoBody.innerHTML = dfActive('exc') ? `<div class="empty">No open exceptions in this date range.</div>` : `<div class="empty" style="color:var(--accent);">&#9989; No open exceptions.</div>`;
   } else {
     exoBody.innerHTML = `<div class="card-row">` + overrides.map(e => `
       <div class="item-card">
@@ -470,12 +524,14 @@ function computeAll(){
   }
 
   // --- Recent Reassignments ---
-  const reassign = DATA.REASSIGNMENT_LOG || [];
+  const reassignAll = DATA.REASSIGNMENT_LOG || [];
+  const reassign = reassignAll.filter(r => dfIn('reassign', r.End_Time || r.Start_Time || r.Timestamp));
+  dfNote('reassign', reassign.length, reassignAll.length);
   const reBody = $('reassignBody');
   if(reassign.length === 0){
-    reBody.innerHTML = `<div class="empty">No reassignments logged.</div>`;
+    reBody.innerHTML = `<div class="empty">${dfActive('reassign') ? 'No reassignments in this date range.' : 'No reassignments logged.'}</div>`;
   } else {
-    reBody.innerHTML = `<div class="card-row">` + reassign.slice().sort((a,b) => new Date(b.End_Time||b.Start_Time||0) - new Date(a.End_Time||a.Start_Time||0)).slice(0,10).map(r => `
+    reBody.innerHTML = `<div class="card-row">` + reassign.slice().sort((a,b) => new Date(b.End_Time||b.Start_Time||0) - new Date(a.End_Time||a.Start_Time||0)).slice(0, dfActive('reassign') ? 500 : 10).map(r => `
       <div class="item-card"><div class="left"><b>${esc(r.Bed_ID||'')}</b><div class="meta">${esc(r.Notes||'')} · ${fmtDate(r.End_Time||r.Start_Time||r.Timestamp)}</div></div></div>`).join('') + `</div>`;
   }
 }
@@ -716,6 +772,7 @@ $('refreshIcon').addEventListener('click', pvRefresh);
 $('liGo').addEventListener('click', doLogin);
 $('liPin').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 renderAuth();
+dfWire();
 $('todayLabel').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'});
 loadFeed().then(loadToday);
 </script>
