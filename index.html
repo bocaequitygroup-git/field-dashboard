@@ -654,13 +654,16 @@ function readyBeds(){
   if(VS) return (VS.readyBeds||[]).map(r=>({id:r.bedId, postHarvest:{bedLevel:String(r.scope).indexOf('BED:')===0, cohortId:r.cohortId}}));
   return ((TODAY&&TODAY.beds)||[]).filter(b=>b.postHarvest && b.postHarvest.readyToVerify===true); }
 
-/* Default planting date for a planting cohort: the day its Transplanting / DirectSeeding activity was completed (same rule as ranch_aab). Falls back to today. */
+/* Default planting date for a planting cohort (same rule as field_managerapp): the date the manager scheduled on the completed
+   Transplanting / DirectSeeding session (Scheduled_Date); only if none is on file, the day it was completed. Falls back to blank. */
 function plantingDefaultIso(c, fallback){
-  const rows=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding'].indexOf(s.Activity_Name)!==-1 && String(s.Status||'').toUpperCase()==='COMPLETED' && s.End_Time);
+  const day=v=>{ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1];
+    const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+  const rows=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1 && String(s.Status||'').toUpperCase()==='COMPLETED');
   if(!rows.length) return fallback;
-  rows.sort((a,b)=>new Date(b.End_Time)-new Date(a.End_Time));
-  const d=new Date(rows[0].End_Time); if(isNaN(d)) return fallback;
-  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  rows.sort((a,b)=>new Date(b.End_Time||b.Start_Time||0)-new Date(a.End_Time||a.Start_Time||0));
+  for(const r of rows){ const d=day(r.Scheduled_Date)||day(r.End_Time)||day(r.Start_Time); if(d) return d; }
+  return fallback;
 }
 function renderPending(){
   const acts = pendingActivities(), ready = readyBeds(), signed = !!AUTH.token;
