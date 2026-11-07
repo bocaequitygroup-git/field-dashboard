@@ -129,6 +129,8 @@
   dialog label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;} dialog .inline-in{width:100%;padding:8px;font-size:14px;}
   .err{color:var(--danger);font-size:12px;margin-top:8px;min-height:16px;}
   footer{padding:16px 20px;text-align:center;font-size:11px;color:var(--muted);border-top:1px solid var(--border);}
+.act-link{cursor:pointer;} .act-link:hover td{background:rgba(0,0,0,.035);}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:4px 0;font-size:12.5px;border-bottom:1px solid rgba(0,0,0,.07);}
 </style>
 </head>
 <body>
@@ -269,6 +271,10 @@
   <label for="liPin">PIN</label><input class="inline-in" id="liPin" type="password" inputmode="numeric" autocomplete="current-password">
   <div class="err" id="liErr"></div>
   <div class="bar"><button class="btn" id="liGo" type="button">Sign in</button><button class="btn secondary" type="button" onclick="$('loginDlg').close()">Cancel</button></div>
+</dialog>
+<dialog id="profDlg" style="max-width:520px;width:calc(100% - 32px);">
+  <div id="profBody"></div>
+  <div class="bar" style="margin-top:12px;"><button class="btn secondary" type="button" onclick="$('profDlg').close()">Close</button></div>
 </dialog>
 <dialog id="reasonDlg">
   <h2 style="font-size:15px;margin:0 0 6px;">Explanation required</h2>
@@ -494,8 +500,9 @@ function computeAll(){
   } else {
     $('workerTable').style.display = 'table';
     $('workerEmpty').style.display = 'none';
+    const actLink = (s) => String(s.Status||'').toUpperCase()==='COMPLETED' ? ` class="act-link" title="View activity profile" onclick="openActProfile('${esc(s.Session_ID)}')"` : '';
     $('workerBody').innerHTML = recentSessions.map(s => `
-      <tr>
+      <tr${actLink(s)}>
         <td>${esc(userName(s.Worker_ID))}</td>
         <td>${esc(s.Bed_ID)}</td>
         <td>${esc(s.Activity_Name||'—')}</td>
@@ -547,6 +554,39 @@ const attr = (s) => esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 try{ const o = JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null'); if(o && o.token) Object.assign(AUTH,o); }catch(e){}
 function saveAuth(){ try{ AUTH.token ? sessionStorage.setItem(SESSION_KEY, JSON.stringify(AUTH)) : sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
 
+/* ---------- Completed activity profile: what was done on one finished activity (manager sign-in required) ---------- */
+function apRow(label,val,raw){ const t=(val===''||val==null)?'\u2014':(raw?val:esc(val)); return `<div class="kv"><span class="meta">${esc(label)}</span><span style="text-align:right;">${t}</span></div>`; }
+function apSec(title,rows){ return `<h3 style="font-size:12.5px;margin:12px 0 2px;">${esc(title)}</h3>${rows}`; }
+function renderActProfile(p){
+  const when=x=>x?fmtDT(x):'';
+  const mins=Number(p.elapsedMinutes)||0, vd=Number(p.varianceDays)||0;
+  const timing=p.timing?String(p.timing).toLowerCase()+(vd?' ('+(vd>0?'+':'')+vd+' d)':''):'';
+  const planting=/^(DirectSeeding|Transplanting)$/.test(String(p.activity||''));
+  const reas=(p.reassignments||[]).map(r=>`<div>${esc(when(r.at))} \u00b7 ${esc(r.fromName||'')} \u2192 ${esc(r.toName||'')}${r.managerName?' by '+esc(r.managerName):''}${r.note?'<div class="meta">'+esc(r.note)+'</div>':''}</div>`).join('');
+  const brk=(p.pauses||[]).map(x=>`<div>${esc(when(x.pausedAt))} \u2192 ${esc(x.resumedAt?when(x.resumedAt):'still paused')}${x.reason?' \u00b7 '+esc(x.reason):''}</div>`).join('');
+  const exc=(p.exceptions||[]).map(x=>`<div>${esc(x.type||'Exception')} \u00b7 ${esc(x.severity||'')}${x.notes?' \u2014 '+esc(x.notes):''}</div>`).join('');
+  const fert=p.fertilizer?`${esc(p.fertilizer.type||'')} \u00b7 ${esc(p.fertilizer.brand||'')} \u00b7 ${esc(p.fertilizer.quantity||'')} ${esc(p.fertilizer.unit||'')}`:'';
+  const qty=(p.quantity!==undefined&&p.quantity!==null&&p.quantity!=='')?p.quantity+(p.unit?' '+p.unit:''):'';
+  return `<div style="font-weight:700;font-size:15px;">${esc(p.activity||'')}</div>`+
+    `<div class="meta" style="margin-bottom:6px;">Bed ${esc(p.bedId||'')}${p.cropName?' \u00b7 '+esc(p.cropName):''}${p.cohortId?' \u00b7 '+esc(p.cohortId):''}</div>`+
+    (planting ? apSec('Planting', apRow('Scheduled date',p.scheduledDate)+apRow('Planned DOB',p.plannedDob)+apRow('Actual planting date',p.actualDob)+apRow('Timing vs plan',timing)) : '')+
+    apSec('Assignment', apRow('Assigned to',p.workerName||p.workerId)+apRow('Assigned by',p.managerName)+apRow('Dispatched',when(p.assignedAt))+apRow('Scheduled for',p.scheduledDate)+(reas?apRow('Reassigned',reas,true):apRow('Reassigned','No')))+
+    apSec('Work time', apRow('Started',when(p.startedAt))+apRow('Completed',when(p.endedAt))+apRow('Working time',mins?Math.floor(mins/60)+'h '+String(mins%60).padStart(2,'0')+'m':'')+(brk?apRow('Breaks',brk,true):apRow('Breaks','None')))+
+    apSec('Output & notes', apRow('Quantity',qty)+(fert?apRow('Fertilizer',fert,true):'')+apRow('Notes',p.notes)+(exc?apRow('Exceptions',exc,true):''))+
+    apSec('Review', apRow('Verified by',p.verifiedBy)+apRow('Verified on',when(p.verifiedAt))+apRow('Checked by',p.checkedBy)+apRow('Checked on',when(p.checkedAt)))+
+    apSec('Record', apRow('Activity ID',p.activityId)+apRow('Session ID',p.sessionId)+apRow('Log ID',p.logId));
+}
+async function openActProfile(sessionId){
+  const dlg=$('profDlg'), body=$('profBody');
+  if(!AUTH.token){
+    body.innerHTML='<div class="meta">Sign in as a manager to view the full activity profile.</div><div class="bar" style="margin-top:12px;"><button class="btn" type="button" onclick="$(\'profDlg\').close();openLogin()">Manager sign-in</button></div>';
+    dlg.showModal(); return;
+  }
+  body.innerHTML='<div class="meta">Loading the activity profile\u2026</div>';
+  dlg.showModal();
+  try{ body.innerHTML = renderActProfile(await api('get-activity-profile',{sessionId},30000)); }
+  catch(e){ body.innerHTML = `<div class="err">${esc(e.message||'Could not load this activity.')}</div>`; }
+}
 async function api(action, payload, timeoutMs){
   const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort(), timeoutMs||60000);
   try{
