@@ -304,6 +304,7 @@ function fmtDate(d){
   if(isNaN(dt)) return String(d);
   return dt.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 }
+function fmtDT(v){ const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}); }
 function daysBetween(a,b){
   const A = new Date(a), B = b?new Date(b):new Date();
   return Math.round((B-A)/86400000);
@@ -569,7 +570,7 @@ function renderActProfile(p){
   const qty=(p.quantity!==undefined&&p.quantity!==null&&p.quantity!=='')?p.quantity+(p.unit?' '+p.unit:''):'';
   return `<div style="font-weight:700;font-size:15px;">${esc(p.activity||'')}</div>`+
     `<div class="meta" style="margin-bottom:6px;">Bed ${esc(p.bedId||'')}${p.cropName?' \u00b7 '+esc(p.cropName):''}${p.cohortId?' \u00b7 '+esc(p.cohortId):''}</div>`+
-    (planting ? apSec('Planting', apRow('Scheduled date',p.scheduledDate)+apRow('Planned DOB',p.plannedDob)+apRow('Actual planting date',p.actualDob)+apRow('Timing vs plan',timing)) : '')+
+    (planting ? apSec('Planting', apRow('Scheduled date',p.scheduledDate)+apRow('Planned DOB',p.plannedDob)+(p.actualDob?apRow('Actual planting date',p.actualDob):apRow('Actual planting date (scheduled, not yet verified)',p.scheduledDate))+apRow('Timing vs plan',timing)) : '')+
     apSec('Assignment', apRow('Assigned to',p.workerName||p.workerId)+apRow('Assigned by',p.managerName)+apRow('Dispatched',when(p.assignedAt))+apRow('Scheduled for',p.scheduledDate)+(reas?apRow('Reassigned',reas,true):apRow('Reassigned','No')))+
     apSec('Work time', apRow('Started',when(p.startedAt))+apRow('Completed',when(p.endedAt))+apRow('Working time',mins?Math.floor(mins/60)+'h '+String(mins%60).padStart(2,'0')+'m':'')+(brk?apRow('Breaks',brk,true):apRow('Breaks','None')))+
     apSec('Output & notes', apRow('Quantity',qty)+(fert?apRow('Fertilizer',fert,true):'')+apRow('Notes',p.notes)+(exc?apRow('Exceptions',exc,true):''))+
