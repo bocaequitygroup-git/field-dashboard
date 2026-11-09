@@ -68,6 +68,22 @@
   .lbd-filters select{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px 7px;font-size:12px;font-family:inherit;min-width:110px;max-width:190px;}
   .lbd-filters select.on{border-color:var(--accent);}
   .lbd-filters .lbd-note{margin-left:auto;font-size:11px;color:var(--muted);}
+  .state-sum{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin:0 0 16px;}
+  .state-sum .ss-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+  .state-sum h2{font-size:14px;margin:0;}
+  .state-sum .ss-note{font-size:11px;color:var(--muted);}
+  .ss-bar{display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--panel2);margin:6px 0 12px;}
+  .ss-bar span{display:block;min-width:2px;}
+  .ss-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:8px;}
+  .ss-tile{background:var(--panel2);border:1px solid var(--border);border-left:4px solid var(--c,var(--muted));border-radius:8px;padding:8px 10px;}
+  .ss-tile .n{font-size:22px;font-weight:700;line-height:1.1;}
+  .ss-tile .n small{font-size:11px;font-weight:500;color:var(--muted);margin-left:4px;}
+  .ss-tile .l{font-size:11.5px;font-weight:600;margin-top:2px;}
+  .ss-tile .d{font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.3;}
+  .ss-sub{font-size:11px;color:var(--muted);font-weight:600;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.04em;}
+  .ss-blocks{margin-top:12px;font-size:12px;} .ss-blocks summary{cursor:pointer;color:var(--accent);font-weight:600;}
+  .ss-blocks table{width:100%;border-collapse:collapse;margin-top:8px;} .ss-blocks th,.ss-blocks td{padding:5px 8px;border-bottom:1px solid var(--border);text-align:right;} .ss-blocks th:first-child,.ss-blocks td:first-child{text-align:left;}
+  .ss-blocks th{font-size:10.5px;color:var(--muted);font-weight:600;}
   .wg-badge{display:inline-block;font-size:10px;font-weight:700;border-radius:999px;padding:2px 7px;border:1px solid var(--border);color:var(--muted);margin-left:6px;vertical-align:middle;}
   .wg-badge.warn{color:var(--warn);border-color:var(--warn);}
   .wg-badge.ok{color:var(--accent);border-color:var(--accent);}
@@ -213,6 +229,8 @@
       <div id="lbDetail"></div>
     </div>
   </div>
+
+  <section class="state-sum" id="stateSum" aria-label="Bed and cohort state summary"></section>
 
   <div class="panel-grid">
     <div class="panel">
@@ -386,6 +404,68 @@ function dfWire(){
   });
   dfSyncControls();
 }
+/* ----- Bed & cohort state summary (top of the page). Every bed lands in exactly ONE category, so the tiles add up to the bed total.
+   Source: BED_MASTER.Bed_Status (blank = UNVERIFIED) and COHORT_PRODUCTION.Cohort_Status; the assignment buckets come from the server
+   reconciliation (DATA.ASSIGNMENT_RECON) with the assignment queue as fallback. ----- */
+const SS_BED_CATS = [
+  { k:'reset',     label:'Post-Harvest / Reset', color:'#e0a030', desc:'Cleanup, cover cropping, turnover' },
+  { k:'available', label:'Available',            color:'#3ddc84', desc:'Verified ready for a cohort' },
+  { k:'reserved',  label:'Reserved',             color:'#5aa9ff', desc:'Cohort assigned, awaiting planting' },
+  { k:'growing',   label:'Growing',              color:'#2f9e5f', desc:'Planted, not yet harvesting' },
+  { k:'harvest',   label:'Harvest Ready / Harvesting', color:'#d9c13a', desc:'Ready to cut or being picked' },
+  { k:'blocked',   label:'Blocked',              color:'#e05a47', desc:'Held for maintenance or compliance' },
+  { k:'unverified',label:'Unverified',           color:'#8a948d', desc:'Physical state never confirmed' }
+];
+function ssBedCat(b){
+  const s = String(b.Bed_Status||'').trim().toUpperCase();
+  if(s === 'POST-HARVEST ACTIVITIES' || s === 'POST-HARVEST') return 'reset';
+  if(s === 'AVAILABLE') return 'available';
+  if(s === 'RESERVED') return 'reserved';
+  if(s === 'PLANTED' || s === 'GROWING') return 'growing';
+  if(s === 'HARVEST READY' || s === 'HARVESTING') return 'harvest';
+  if(['BLOCKED','OUT_OF_SERVICE','MAINTENANCE','QUARANTINE'].indexOf(s) !== -1) return 'blocked';
+  return 'unverified';
+}
+function renderStateSummary(beds, cohortProd, caq){
+  const box = $('stateSum'); if(!box) return;
+  const total = beds.length, cnt = {}, byBlock = {}, sub = { planted:0, growing:0, ready:0, harvesting:0 };
+  SS_BED_CATS.forEach(c => cnt[c.k] = 0);
+  beds.forEach(b => {
+    const k = ssBedCat(b), st = String(b.Bed_Status||'').trim().toUpperCase(), blk = String(b.Block_ID||'').trim() || '—';
+    cnt[k]++; (byBlock[blk] = byBlock[blk] || { total:0 }).total++; byBlock[blk][k] = (byBlock[blk][k]||0) + 1;
+    if(st === 'PLANTED') sub.planted++; else if(st === 'GROWING') sub.growing++; else if(st === 'HARVEST READY') sub.ready++; else if(st === 'HARVESTING') sub.harvesting++;
+  });
+  const pct = (n) => total ? Math.round(n / total * 100) + '%' : '0%';
+  const detail = { growing: sub.planted || sub.growing ? sub.planted + ' planted · ' + sub.growing + ' growing' : '', harvest: sub.ready || sub.harvesting ? sub.ready + ' ready · ' + sub.harvesting + ' harvesting' : '' };
+  const bedTiles = SS_BED_CATS.map(c => `<div class="ss-tile" style="--c:${c.color}"><div class="n">${cnt[c.k]}<small>${pct(cnt[c.k])}</small></div><div class="l">${esc(c.label)}</div><div class="d">${esc(detail[c.k] || c.desc)}</div></div>`).join('');
+  const bar = SS_BED_CATS.filter(c => cnt[c.k]).map(c => `<span style="width:${cnt[c.k]/total*100}%;background:${c.color}" title="${esc(c.label)}: ${cnt[c.k]}"></span>`).join('');
+
+  // cohorts
+  const up = (v) => String(v||'').trim().toUpperCase(), real = cohortProd.filter(c => c.Cohort_ID);
+  const nBy = (...st) => real.filter(c => st.indexOf(up(c.Cohort_Status)) !== -1).length;
+  const active = nBy('ACTIVE'), wnp = nBy('WAITING_NEXT_PICK'), pre = nBy('PRE_PLANTING'), planned = nBy('PLANNED');
+  const AR = DATA.ASSIGNMENT_RECON, ARb = AR && AR.buckets;
+  const queued = {}; caq.forEach(q => { queued[up(q.Cohort_ID)] = up(q.Status); });
+  const waitRelease = ARb ? Number(ARb.BLOCKED_BED_TURNOVER || 0)
+    : caq.filter(q => up(q.Status) === 'EXCEPTION' && up(q.Exception_Type) === 'PLAN_BED_UNAVAILABLE').length;
+  const proposed = ARb ? Number(ARb.PROPOSED || 0) : caq.filter(q => up(q.Status) === 'PROPOSED').length;
+  const otherPlanned = Math.max(0, planned - waitRelease - proposed);
+  const coh = [
+    { l:'Growing in field', n:active + wnp, c:'#2f9e5f', d:active + ' growing · ' + wnp + ' between picks' },
+    { l:'Staged', n:pre, c:'#5aa9ff', d:'Bed assigned, awaiting Verify Planting' },
+    { l:'Awaiting bed release', n:waitRelease, c:'#e0a030', d:'Planned bed still in turnover' },
+    { l:'Bed proposed', n:proposed, c:'#d9c13a', d:'Waiting for manager approval' },
+    { l:'Planned, no bed yet', n:otherPlanned, c:'#8a948d', d:'Not yet proposed or needs a decision' }
+  ];
+  const cohTiles = coh.map(c => `<div class="ss-tile" style="--c:${c.c}"><div class="n">${c.n}</div><div class="l">${esc(c.l)}</div><div class="d">${esc(c.d)}</div></div>`).join('');
+
+  const cols = SS_BED_CATS.map(c => c.k);
+  const rows = Object.keys(byBlock).sort(lbdNum).map(b => `<tr><td><b>${esc(b)}</b></td><td>${byBlock[b].total}</td>${cols.map(k => `<td>${byBlock[b][k]||0}</td>`).join('')}</tr>`).join('');
+  box.innerHTML = `<div class="ss-head"><h2>Bed &amp; Cohort State</h2><span class="ss-note">${total} beds · ${real.length} cohorts · live from BED_MASTER and COHORT_PRODUCTION</span></div>
+    <div class="ss-sub" style="margin-top:4px;">Beds</div><div class="ss-bar">${bar}</div><div class="ss-tiles">${bedTiles}</div>
+    <div class="ss-sub">Cohorts</div><div class="ss-tiles">${cohTiles}</div>
+    <details class="ss-blocks"><summary>Bed status by block</summary><table><thead><tr><th>Block</th><th>Beds</th>${SS_BED_CATS.map(c => `<th>${esc(c.label.split(' / ')[0])}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></details>`;
+}
 function computeAll(){
   const beds = DATA.BED_MASTER || [];
   const caq = DATA.COHORT_ASSIGNMENT_QUEUE || [];
@@ -429,7 +509,9 @@ function computeAll(){
   });
 
   const openExceptions = exceptions.filter(e => (e.Exception_Status||'').toUpperCase() === 'OPEN');
-  const cohortsStaged = caq.filter(c => (c.Status||'').toUpperCase() === 'APPROVED');
+  // Cohorts Staged = cohorts with a bed assigned that are waiting for Verify Planting (PRE_PLANTING). The old test looked for queue
+  // status APPROVED, which the assignment engine no longer writes (it writes ASSIGNED), so the tile always read 0.
+  const cohortsStaged = cohortProd.filter(c => String(c.Cohort_Status||'').trim().toUpperCase() === 'PRE_PLANTING');
   const proposedN = caq.filter(c => (c.Status||'').toUpperCase() === 'PROPOSED').length;
 
   $('kpiBeds').innerHTML = `${verifiedReady} <small>of ${totalBeds}</small>`;
@@ -456,6 +538,7 @@ function computeAll(){
     $('lbNote').textContent = 'Labor budget is not available from the server.';
   }
 
+  renderStateSummary(beds, cohortProd, caq);
   renderLbDetail(); lbdLoad(false);
   PV.plant = plantingsPending; PV.block = blockers; PV.proposedN = proposedN;
   renderPending();
