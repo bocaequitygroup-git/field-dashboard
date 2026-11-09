@@ -63,6 +63,15 @@
   .lbd-tbl .rule{font-size:11px;color:var(--muted);margin-top:2px;}
   .lbd-link{color:var(--accent);font-weight:700;cursor:pointer;text-decoration:underline;background:none;border:none;padding:0;font-size:12px;text-align:left;}
   .lbd-sub{font-size:11px;color:var(--muted);margin:14px 0 6px;font-weight:600;}
+  .lbd-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 10px;}
+  .lbd-filters label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted);}
+  .lbd-filters select{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px 7px;font-size:12px;font-family:inherit;min-width:110px;max-width:190px;}
+  .lbd-filters select.on{border-color:var(--accent);}
+  .lbd-filters .lbd-note{margin-left:auto;font-size:11px;color:var(--muted);}
+  .wg-badge{display:inline-block;font-size:10px;font-weight:700;border-radius:999px;padding:2px 7px;border:1px solid var(--border);color:var(--muted);margin-left:6px;vertical-align:middle;}
+  .wg-badge.warn{color:var(--warn);border-color:var(--warn);}
+  .wg-badge.ok{color:var(--accent);border-color:var(--accent);}
+  .wg-sub{font-size:11px;color:var(--muted);font-weight:600;margin:12px 0 6px;}
 
   .panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
   @media(max-width:900px){.panel-grid{grid-template-columns:1fr;}}
@@ -239,10 +248,10 @@
     <div class="panel">
       <div class="panel-head">
         <span class="icon">&#128737;</span>
-        <div class="titles"><h2>Crop Watchguard</h2><div class="desc">Routine scouting feed</div></div>
+        <div class="titles"><h2>Crop Watchguard</h2><div class="desc">Scouting rounds · findings · beds due</div></div>
       </div>
       <div class="panel-body">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Cadence: every 7 days during growth · <span id="scoutSummary">no scout findings logged yet</span>.</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Cadence: every 7 days during growth · <span id="scoutSummary">loading…</span></div>
         <div id="scoutBody"></div>
       </div>
     </div>
@@ -485,17 +494,54 @@ function computeAll(){
   }
 
   // --- Crop Watchguard ---
-  if(scout.length === 0){
-    $('scoutSummary').textContent = 'no scout findings logged yet';
-    $('scoutBody').innerHTML = `<div class="empty">&#128737; SCOUT_FINDING is empty — no pest/disease reports on file.</div>`;
-  } else {
-    $('scoutSummary').textContent = `${scout.length} findings on file`;
-    $('scoutBody').innerHTML = `<div class="card-row">` + scout.slice(0,10).map(f => `
-      <div class="item-card">
-        <div class="left"><b>${esc(f.Bed_ID)} · ${esc(f.Domain)} — ${esc(f.Symptom)}</b>
-        <div class="meta">${esc(f.Severity)} · ${fmtDate(f.Timestamp)}</div></div>
-      </div>`).join('') + `</div>`;
+  // Two sources: SCOUT_FINDING (what a scout saw) AND completed scouting sessions (the scouting itself, even when nothing was found).
+  // A "nothing found" round writes no finding, so the feed used to report an empty watchguard while scouting was being done.
+  const SCOUT_RE = /scout|inspect/i, CADENCE_DAYS = 7, DAY = 86400000, nowMs = Date.now();
+  const bedKey = (v) => String(v||'').trim().toUpperCase();
+  const scoutDone = sessions.filter(s => SCOUT_RE.test(String(s.Activity_Name||'')) && String(s.Status||'').toUpperCase() === 'COMPLETED')
+    .map(s => ({ s, t: new Date(s.End_Time || s.Start_Time || 0).getTime() }))
+    .filter(x => isFinite(x.t) && x.t > 0).sort((a,b) => b.t - a.t);
+  const lastScouted = {};
+  scoutDone.forEach(x => { const k = bedKey(x.s.Bed_ID); if(k && !lastScouted[k]) lastScouted[k] = x.t; });
+  const findingsByBed = {};
+  scout.forEach(f => { const k = bedKey(f.Bed_ID); (findingsByBed[k] = findingsByBed[k] || []).push(f); });
+  const isOpenF = (f) => String(f.Resolved_Status||'').trim().toUpperCase() === 'OPEN';
+  const openF = scout.filter(isOpenF).length;
+  const recentScout = scoutDone.filter(x => nowMs - x.t <= 30*DAY);
+
+  // Growing cohorts that are due: no scouting in the last CADENCE_DAYS (clock starts at planting if never scouted)
+  const growing = cohortProd.filter(c => c.Cohort_ID && c.Location_ID && c.Actual_DOB && ['ACTIVE','WAITING_NEXT_PICK'].indexOf(String(c.Cohort_Status||'').trim().toUpperCase()) !== -1);
+  const due = growing.map(c => {
+    const k = bedKey(c.Location_ID), last = lastScouted[k] || 0, plantedMs = new Date(c.Actual_DOB).getTime() || 0;
+    const ref = Math.max(last, plantedMs), gap = Math.floor((nowMs - ref) / DAY);
+    return { c, last, gap, never: !last };
+  }).filter(x => x.gap >= CADENCE_DAYS).sort((a,b) => b.gap - a.gap);
+
+  $('scoutSummary').innerHTML = `${scoutDone.length ? recentScout.length + ' scouting rounds in the last 30 days' : 'no scouting rounds completed yet'} · ${scout.length} finding${scout.length===1?'':'s'}${scout.length ? ' (' + openF + ' open)' : ''} · ${due.length} of ${growing.length} growing beds due`;
+  let wg = '';
+  if(due.length){
+    wg += `<div class="wg-sub">Due for scouting (${due.length})</div><div class="card-row">` + due.slice(0,8).map(x => `
+      <div class="item-card"><div class="left"><b>${esc(x.c.Location_ID)} · ${esc(x.c.Crop_Name||x.c.Crop_ID)}</b>
+        <div class="meta">${x.never ? 'Never scouted' : 'Last scouted ' + fmtDate(x.last)} · ${x.gap} days since ${x.never ? 'planting' : 'last round'}</div></div>
+        <span class="wg-badge warn">Overdue</span></div>`).join('') + (due.length > 8 ? `<div class="meta" style="font-size:11px;color:var(--muted);">+ ${due.length - 8} more</div>` : '') + `</div>`;
+  } else if(growing.length){
+    wg += `<div class="wg-sub">Due for scouting</div><div class="empty">&#10003; Every growing bed was scouted in the last ${CADENCE_DAYS} days.</div>`;
   }
+  if(recentScout.length){
+    wg += `<div class="wg-sub">Scouting completed (last 30 days)</div><div class="card-row">` + recentScout.slice(0,10).map(x => {
+      const s = x.s, fs = (findingsByBed[bedKey(s.Bed_ID)] || []).filter(f => Math.abs(new Date(f.Timestamp).getTime() - x.t) < 2*DAY);
+      const res = fs.length ? `<span class="wg-badge warn">${fs.length} finding${fs.length>1?'s':''}: ${esc(fs[0].Severity||'')}</span>` : `<span class="wg-badge ok">Nothing found</span>`;
+      return `<div class="item-card"><div class="left"><b>${esc(s.Bed_ID)} · ${esc(s.Activity_Name)}</b>
+        <div class="meta">${esc(userName(s.Worker_ID))} · ${fmtDate(x.t)}</div></div>${res}</div>`; }).join('') + `</div>`;
+  }
+  if(scout.length){
+    wg += `<div class="wg-sub">Findings on file (${scout.length}${openF ? ', ' + openF + ' open' : ''})</div><div class="card-row">` + scout.slice().sort((a,b) => new Date(b.Timestamp) - new Date(a.Timestamp)).slice(0,10).map(f => `
+      <div class="item-card"><div class="left"><b>${esc(f.Bed_ID)} · ${esc(f.Domain)} — ${esc(f.Symptom)}</b>
+        <div class="meta">${esc(f.Severity)} · ${fmtDate(f.Timestamp)}${f.Worker ? ' · ' + esc(f.Worker) : ''}</div></div>
+        ${isOpenF(f) ? '<span class="wg-badge warn">Open</span>' : ''}</div>`).join('') + `</div>`;
+  }
+  if(!wg) wg = `<div class="empty">&#128737; No scouting rounds or findings on file yet.</div>`;
+  $('scoutBody').innerHTML = wg;
 
   // --- Worker Location Board ---
   // Live work first (ASSIGNED / ACTIVE / PAUSED, never cut off), then the most recent finished sessions.
@@ -629,7 +675,27 @@ async function api(action, payload, timeoutMs){
 /* ---------- Labor hours vs budget: activities over budget (manager sign-in) ----------
  * Counts come from DATA.LABOR_BUDGET (public, counts only). The per-activity lines need a manager sign-in: get-labor-budget.
  * Each over-budget row opens the activity profile dialog with the budget comparison first, then the profile when the line has a session ID. */
-const LBD = { data: null, key: '', loading: false, err: '', open: false };   // collapsed by default: the full list is long and must not push the dashboard around
+const LBD = { data: null, key: '', loading: false, err: '', open: false, f: { block: '', bed: '', activity: '', worker: '' } };
+/* Bed / block of a labor-budget line. The server line may carry bedId directly; otherwise it is found through the line's session ID in the
+   public session feed. Block always comes from BED_MASTER (Block_ID), falling back to the bed ID prefix (B1-07 -> B1). */
+function lbdBedOf(l){
+  let bed = String(l.bedId || l.bed || l.Bed_ID || '').trim();
+  if(!bed){
+    const sid = String(l.sessionId || l.session_id || l.Session_ID || '').trim();
+    if(sid){ const s = (DATA.FIELD_LIVE_SESSION || []).find(x => String(x.Session_ID||'').trim() === sid); if(s) bed = String(s.Bed_ID || '').trim(); }
+  }
+  return bed;
+}
+function lbdBlockOf(l, bed){
+  const direct = String(l.blockId || l.block || l.Block_ID || '').trim(); if(direct) return direct;
+  if(!bed) return '';
+  const b = (DATA.BED_MASTER || []).find(x => String(x.Bed_ID||'').trim().toUpperCase() === bed.toUpperCase());
+  if(b && String(b.Block_ID||'').trim()) return String(b.Block_ID).trim();
+  const m = /^([A-Za-z]+\d*)-/.exec(bed); return m ? m[1].toUpperCase() : '';
+}
+function lbdSet(k, v){ LBD.f[k] = v; if(k === 'block') LBD.f.bed = ''; renderLbDetail(); }
+function lbdClear(){ LBD.f = { block: '', bed: '', activity: '', worker: '' }; renderLbDetail(); }
+const lbdNum = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });   // collapsed by default: the full list is long and must not push the dashboard around
 function lbdToggle(){ LBD.open = !LBD.open; renderLbDetail(); }
 function lbdH(h){ const r = Math.round(Number(h || 0) * 100) / 100; return (r % 1 ? r.toFixed(2) : r.toFixed(1)) + ' h'; }
 function lbdKey(lb){ return (lb.from || '') + '|' + (lb.to || ''); }
@@ -661,8 +727,21 @@ function renderLbDetail(){
   if (!LBD.data) { box.innerHTML = ''; return; }
 
   const lines = LBD.data.lines || [];
-  const over = lines.map((l, i) => ({ l, i })).filter(x => x.l.status === 'OVER')
-                    .sort((a, b) => Number(b.l.overHours || 0) - Number(a.l.overHours || 0));
+  const allOver = lines.map((l, i) => { const bed = lbdBedOf(l); return { l, i, bed, block: lbdBlockOf(l, bed) }; })
+                       .filter(x => x.l.status === 'OVER');
+  // filter options come from the full over-budget set; the bed list narrows to the chosen block
+  const F = LBD.f, uniq = (arr) => Array.from(new Set(arr.filter(Boolean))).sort(lbdNum);
+  const blockOpts = uniq(allOver.map(x => x.block));
+  const bedOpts = uniq(allOver.filter(x => !F.block || x.block === F.block).map(x => x.bed));
+  const actOpts = uniq(allOver.map(x => x.l.activity || 'Unnamed activity'));
+  const workerOpts = uniq(allOver.map(x => x.l.worker));
+  const over = allOver.filter(x => (!F.block || x.block === F.block) && (!F.bed || x.bed === F.bed) &&
+                                   (!F.activity || (x.l.activity || 'Unnamed activity') === F.activity) && (!F.worker || x.l.worker === F.worker))
+                      .sort((a, b) => Number(b.l.overHours || 0) - Number(a.l.overHours || 0));
+  const sel = (k, label, opts, all) => `<label>${label}<select class="${F[k] ? 'on' : ''}" onchange="lbdSet('${k}', this.value)"><option value="">${all}</option>${opts.map(o => `<option value="${attr(o)}"${F[k] === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select></label>`;
+  const anyF = !!(F.block || F.bed || F.activity || F.worker);
+  const filterBar = `<div class="lbd-filters">${sel('block', 'Block', blockOpts, 'All blocks')}${sel('bed', 'Bed', bedOpts, 'All beds')}${sel('activity', 'Activity', actOpts, 'All activities')}${sel('worker', 'Worker', workerOpts, 'All workers')}
+      ${anyF ? '<button class="lbd-link" onclick="lbdClear()">Clear filters</button>' : ''}<span class="lbd-note">${anyF ? over.length + ' of ' + allOver.length + ' shown' : ''}</span></div>`;
   const unavailable = lines.filter(l => l.status === 'UNAVAILABLE').length;
   const totalOver = over.reduce((s, x) => s + Number(x.l.overHours || 0), 0);
 
@@ -686,9 +765,11 @@ function renderLbDetail(){
       ${acts.map(a => `<tr><td><b>${esc(a.name)}</b>${a.id ? `<div class="rule">${esc(a.id)}</div>` : ''}</td><td class="num">${a.n}</td><td class="num">${lbdH(a.actual)}</td><td class="num">${lbdH(a.budget)}</td><td class="num over">+${lbdH(a.over)}</td></tr>`).join('')}
     </tbody></table></div>` : '';
 
-  const sessRows = over.map(({ l, i }) => `<tr>
+  const sessRows = over.map(({ l, i, bed, block }) => `<tr>
       <td><button class="lbd-link" onclick="lbdOpen(${i})">${esc(l.activity || 'Activity')}</button>
         <div class="rule">${esc(l.activityId || '')}${l.budgetRule ? ' · ' + esc(l.budgetRule) : ''}</div></td>
+      <td>${esc(block || '—')}</td>
+      <td>${esc(bed || '—')}</td>
       <td>${esc(l.worker || '')}</td>
       <td>${esc(l.completed || '')}</td>
       <td class="num">${lbdH(l.actualHours)}</td>
@@ -696,17 +777,17 @@ function renderLbDetail(){
       <td class="num over">+${lbdH(l.overHours)}</td></tr>`).join('');
   const sessTable = over.length
     ? `<div class="lbd-sub">Over budget, by activity (click an activity to see actual vs budget)</div>
-       <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th>Worker</th><th>Completed</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>${sessRows}</tbody></table></div>`
-    : `<div class="meta" style="margin-top:12px;">No activities went over budget in this period.</div>`;
+       <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th>Block</th><th>Bed</th><th>Worker</th><th>Completed</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>${sessRows}</tbody></table></div>`
+    : `<div class="meta" style="margin-top:12px;">${anyF ? 'No over-budget activities match these filters.' : 'No activities went over budget in this period.'}</div>`;
 
   const kpiCard = box.parentElement; if (kpiCard) kpiCard.classList.toggle('lb-open', !!LBD.open);
   if (!LBD.open) {
-    box.innerHTML = `<div class="lbd-wrap" style="padding-top:8px;margin-top:4px;"><button class="lbd-link" onclick="lbdToggle()">&#9656; Show activities over budget (${over.length})</button></div>`;
+    box.innerHTML = `<div class="lbd-wrap" style="padding-top:8px;margin-top:4px;"><button class="lbd-link" onclick="lbdToggle()">&#9656; Show activities over budget (${allOver.length})</button></div>`;
     return;
   }
   box.innerHTML = `<div class="lbd-wrap">
       <div class="lbd-head"><h3>Activities over budget</h3><span><button class="lbd-link" onclick="lbdLoad(true)">Refresh</button> &nbsp; <button class="lbd-link" onclick="lbdToggle()">Hide</button></span></div>
-      ${summary}${actTable}${sessTable}</div>`;
+      ${filterBar}${summary}${actTable}${sessTable}</div>`;
 }
 /* Activity profile with the budget comparison for one completed line. */
 function lbdBudgetHtml(l){
@@ -715,7 +796,7 @@ function lbdBudgetHtml(l){
               : l.status === 'UNDER' ? `${lbdH(l.underHours)} under budget`
               : l.status === 'AT' ? 'Matches budget' : 'Budget not available';
   return `<div style="font-weight:700;font-size:15px;">${esc(l.activity || 'Activity')}</div>
-    <div class="meta" style="margin-bottom:8px;">${esc(l.activityId || '')} · ${esc(l.worker || '')} · completed ${esc(l.completed || '')}</div>
+    <div class="meta" style="margin-bottom:8px;">${esc(l.activityId || '')}${(() => { const b = lbdBedOf(l), k = lbdBlockOf(l, b); return b ? ' · ' + esc(k ? k + ' / ' : '') + 'Bed ' + esc(b) : ''; })()} · ${esc(l.worker || '')} · completed ${esc(l.completed || '')}</div>
     <div class="lbd-sum" style="margin:0 0 6px;">
       <div class="lbd-chip"><span>Actual hours</span><b>${lbdH(l.actualHours)}</b></div>
       <div class="lbd-chip"><span>Budget hours</span><b>${ok ? lbdH(l.budgetHours) : '—'}</b></div>
