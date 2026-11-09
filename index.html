@@ -767,7 +767,24 @@ function lbdBedOf(l){
     const sid = String(l.sessionId || l.session_id || l.Session_ID || '').trim();
     if(sid){ const s = (DATA.FIELD_LIVE_SESSION || []).find(x => String(x.Session_ID||'').trim() === sid); if(s) bed = String(s.Bed_ID || '').trim(); }
   }
+  if(!bed) bed = lbdGuessBed(l);
   return bed;
+}
+/* Last resort when the server line has neither a bed nor a session ID: match a completed session by activity + worker name + completion
+   day, and when several beds fit, take the one whose elapsed time is closest to the line's actual hours. */
+function lbdGuessBed(l){
+  try{
+    const users = DATA.USERS || [], nameOf = (id) => { const u = users.find(u => String(u.Worker_ID||'').toLowerCase() === String(id||'').toLowerCase()); return u ? u.Name : id; };
+    const day = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
+    const want = String(l.completed || '').slice(0,10), act = String(l.activity || '').trim(), who = String(l.worker || '').trim().toLowerCase();
+    const c = (DATA.FIELD_LIVE_SESSION || []).filter(s => String(s.Status||'').toUpperCase() === 'COMPLETED' && String(s.Activity_Name||'').trim() === act &&
+      String(nameOf(s.Worker_ID)||'').trim().toLowerCase() === who && day(s.End_Time) === want);
+    if(!c.length) return '';
+    if(new Set(c.map(s => String(s.Bed_ID||'').trim())).size === 1) return String(c[0].Bed_ID||'').trim();
+    const hrs = Number(l.actualHours || 0), el = (s) => { const a = new Date(s.Start_Time), b = new Date(s.End_Time); return isNaN(a)||isNaN(b) ? 1e9 : Math.abs((b - a)/3600000 - hrs); };
+    c.sort((a,b) => el(a) - el(b));
+    return el(c[0]) < 0.05 ? String(c[0].Bed_ID||'').trim() : '';
+  }catch(e){ return ''; }
 }
 function lbdBlockOf(l, bed){
   const direct = String(l.blockId || l.block || l.Block_ID || '').trim(); if(direct) return direct;
@@ -830,9 +847,10 @@ function renderLbDetail(){
 
   // summary by activity type, so the biggest overruns are visible at a glance
   const byAct = {};
-  over.forEach(({ l }) => {
+  over.forEach(({ l, bed, block }) => {
     const k = l.activity || 'Unnamed activity';
-    const o = byAct[k] || (byAct[k] = { name: k, id: l.activityId || '', n: 0, actual: 0, budget: 0, over: 0 });
+    const o = byAct[k] || (byAct[k] = { name: k, id: l.activityId || '', n: 0, actual: 0, budget: 0, over: 0, beds: {}, blocks: {} });
+    if (bed) o.beds[bed] = true; if (block) o.blocks[block] = true;
     o.n++; o.actual += Number(l.actualHours || 0); o.budget += Number(l.budgetHours || 0); o.over += Number(l.overHours || 0);
   });
   const acts = Object.values(byAct).sort((a, b) => b.over - a.over);
@@ -844,8 +862,10 @@ function renderLbDetail(){
       <div class="lbd-chip"><span>Budget not available</span><b>${unavailable}</b></div></div>`;
 
   const actTable = acts.length ? `<div class="lbd-sub">By activity</div>
-    <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th class="num">Times over</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>
-      ${acts.map(a => `<tr><td><b>${esc(a.name)}</b>${a.id ? `<div class="rule">${esc(a.id)}</div>` : ''}</td><td class="num">${a.n}</td><td class="num">${lbdH(a.actual)}</td><td class="num">${lbdH(a.budget)}</td><td class="num over">+${lbdH(a.over)}</td></tr>`).join('')}
+    <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th>Block</th><th>Bed</th><th class="num">Times over</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>
+      ${acts.map(a => { const bl = Object.keys(a.blocks).sort(lbdNum), bd = Object.keys(a.beds).sort(lbdNum);
+        const lst = (arr, max) => arr.length ? esc(arr.slice(0, max).join(', ')) + (arr.length > max ? ` <span class="rule" title="${attr(arr.join(', '))}">+${arr.length - max} more</span>` : '') : '—';
+        return `<tr><td><b>${esc(a.name)}</b>${a.id ? `<div class="rule">${esc(a.id)}</div>` : ''}</td><td>${lst(bl, 4)}</td><td>${lst(bd, 4)}</td><td class="num">${a.n}</td><td class="num">${lbdH(a.actual)}</td><td class="num">${lbdH(a.budget)}</td><td class="num over">+${lbdH(a.over)}</td></tr>`; }).join('')}
     </tbody></table></div>` : '';
 
   const sessRows = over.map(({ l, i, bed, block }) => `<tr>
