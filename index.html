@@ -27,6 +27,9 @@
   .sync-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);}
   .refresh-btn{background:none;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;cursor:pointer;font-size:13px;}
   .refresh-btn:hover{border-color:var(--accent);}
+  .refresh-btn[disabled]{opacity:.5;cursor:default;}
+  .refresh-btn .ricon{display:inline-block;}
+  .refresh-btn.spin .ricon{animation:pvspin .7s linear infinite;}
 
   .btn{background:var(--accent-dim);color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;white-space:nowrap;}
   .btn.secondary{background:none;border:1px solid var(--border);color:var(--text);}
@@ -146,7 +149,7 @@
   <div class="status-block">
     <span class="sync-dot"></span>
     <span id="syncLabel">Connecting…</span>
-    <button class="refresh-btn" id="refreshIcon" title="Refresh now">&#8635;</button>
+    <button class="refresh-btn" id="refreshIcon" title="Refresh now" type="button"><span class="ricon">&#8635;</span></button>
     <span id="todayLabel"></span>
     <span id="authBlock"></span>
   </div>
@@ -804,29 +807,84 @@ function syncNowLabel(){
   $('syncLabel').textContent = `Live · synced ${t.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}`;
 }
 
+// FIX: loadFeed had no guard against overlapping requests. Clicking Refresh while an auto-poll (or a
+// previous click) was still in flight fired a second fetch; whichever response arrived LAST simply won,
+// even if it was actually the older one (slow network, server hiccup) - so a refresh could visibly undo a
+// newer refresh, which is what made the button look broken. feedSeq makes only the most recently-STARTED
+// request allowed to apply its result.
+let feedSeq = 0;
 async function loadFeed(){
+  const seq = ++feedSeq;
   try{
     const res = await fetch(EXEC_URL + '?action=dashboard');
     if(!res.ok) throw new Error('HTTP ' + res.status);
-    DATA = await res.json();
+    const json = await res.json();
+    if(seq !== feedSeq) return;   // a newer refresh started after this one; drop this stale result
+    DATA = json;
     syncNowLabel();
     computeAll();
   } catch(err){
+    if(seq !== feedSeq) return;
     console.error(err);
     $('syncLabel').textContent = 'Connection failed \u2014 ' + err.message;
+    throw err;   // let the caller (doRefresh) know this poll failed, so it can back off
   }
 }
 
 // ============================================================
 // Init
 // ============================================================
-$('refreshIcon').addEventListener('click', pvRefresh);
+// FIX: this board used to load once on open and then only when someone noticed it had gone stale and
+// clicked Refresh - there was no auto-refresh at all, so "live" changes (a session completed, a bed
+// verified, a cohort staged) never appeared on the board without a manual click. It now polls quietly
+// every REFRESH_MS while the tab is visible, catches up immediately when the tab regains focus (the
+// browser throttles/pauses timers while a tab is hidden, so a background interval alone is not enough),
+// and backs off automatically if the connection is down so it doesn't hammer a failing endpoint.
+const REFRESH_MS = 15000;
+let refreshTimer = null, refreshBusy = false, refreshFails = 0;
+
+function setRefreshBtnBusy(on){
+  const b = $('refreshIcon');
+  b.disabled = on;
+  b.classList.toggle('spin', on);
+}
+
+// Single entry point for every refresh - manual click, auto-poll, or tab-refocus - so they
+// never overlap or fight each other (see feedSeq note on loadFeed for the underlying race).
+async function doRefresh(){
+  if(refreshBusy) return;
+  refreshBusy = true;
+  setRefreshBtnBusy(true);
+  try{
+    await pvRefresh();
+    refreshFails = 0;
+  } catch(e){
+    refreshFails++;
+  } finally{
+    refreshBusy = false;
+    setRefreshBtnBusy(false);
+  }
+}
+
+function scheduleRefresh(){
+  clearTimeout(refreshTimer);
+  if(document.hidden) return;   // resumes via the visibilitychange listener below
+  const backoff = Math.min(REFRESH_MS * Math.pow(2, Math.min(refreshFails, 4)), 120000);
+  refreshTimer = setTimeout(async () => { await doRefresh(); scheduleRefresh(); }, backoff);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if(!document.hidden) doRefresh().then(scheduleRefresh);
+  else clearTimeout(refreshTimer);
+});
+
+$('refreshIcon').addEventListener('click', doRefresh);
 $('liGo').addEventListener('click', doLogin);
 $('liPin').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 renderAuth();
 dfWire();
 $('todayLabel').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'});
-loadFeed().then(loadToday);
+loadFeed().then(loadToday).then(scheduleRefresh);
 </script>
 </body>
 </html>
