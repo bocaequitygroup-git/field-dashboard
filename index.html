@@ -47,6 +47,22 @@
   .lb-row{display:flex;gap:36px;flex-wrap:wrap;}
   .lb-over{color:var(--danger);} .lb-under{color:var(--blue);} .lb-match{color:var(--accent);}
   .kpi .value small{font-size:14px;color:var(--muted);font-weight:400;}
+  .lbd-wrap{border-top:1px solid var(--border);padding-top:14px;margin-top:6px;}
+  .lbd-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
+  .lbd-head h3{font-size:14px;margin:0;}
+  .lbd-sum{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 12px;}
+  .lbd-chip{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--muted);min-width:120px;}
+  .lbd-chip b{display:block;font-size:18px;color:var(--text,inherit);margin-top:2px;}
+  .lbd-chip.over b{color:var(--danger);}
+  .lbd-scroll{max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:8px;}
+  .lbd-tbl{width:100%;border-collapse:collapse;font-size:12px;}
+  .lbd-tbl th,.lbd-tbl td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
+  .lbd-tbl th{font-size:11px;color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel);}
+  .lbd-tbl .num{text-align:right;white-space:nowrap;}
+  .lbd-tbl .over{color:var(--danger);font-weight:700;}
+  .lbd-tbl .rule{font-size:11px;color:var(--muted);margin-top:2px;}
+  .lbd-link{color:var(--accent);font-weight:700;cursor:pointer;text-decoration:underline;background:none;border:none;padding:0;font-size:12px;text-align:left;}
+  .lbd-sub{font-size:11px;color:var(--muted);margin:14px 0 6px;font-weight:600;}
 
   .panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
   @media(max-width:900px){.panel-grid{grid-template-columns:1fr;}}
@@ -182,6 +198,7 @@
         <div><div class="value lb-match" id="kpiLbMatch">&mdash;</div><div class="meta">Match budget</div></div>
       </div>
       <div class="meta" id="lbNote" style="margin-top:8px;"></div>
+      <div id="lbDetail"></div>
     </div>
   </div>
 
@@ -427,6 +444,7 @@ function computeAll(){
     $('lbNote').textContent = 'Labor budget is not available from the server.';
   }
 
+  renderLbDetail(); lbdLoad(false);
   PV.plant = plantingsPending; PV.block = blockers; PV.proposedN = proposedN;
   renderPending();
 
@@ -605,10 +623,113 @@ async function api(action, payload, timeoutMs){
     return json.data!==undefined ? json.data : json;
   } finally { clearTimeout(timer); }
 }
+/* ---------- Labor hours vs budget: activities over budget (manager sign-in) ----------
+ * Counts come from DATA.LABOR_BUDGET (public, counts only). The per-activity lines need a manager sign-in: get-labor-budget.
+ * Each over-budget row opens the activity profile dialog with the budget comparison first, then the profile when the line has a session ID. */
+const LBD = { data: null, key: '', loading: false, err: '' };
+function lbdH(h){ const r = Math.round(Number(h || 0) * 100) / 100; return (r % 1 ? r.toFixed(2) : r.toFixed(1)) + ' h'; }
+function lbdKey(lb){ return (lb.from || '') + '|' + (lb.to || ''); }
+async function lbdLoad(force){
+  const lb = DATA.LABOR_BUDGET;
+  if (!AUTH.token || !lb || !lb.counts) { renderLbDetail(); return; }
+  const key = lbdKey(lb);
+  if (LBD.loading || (!force && LBD.data && LBD.key === key)) return;
+  LBD.loading = true; LBD.err = ''; renderLbDetail();
+  try {
+    const payload = (lb.from || lb.to) ? { from: lb.from || '', to: lb.to || '' } : { all: true };   // same window as the counts above
+    const r = await api('get-labor-budget', payload, 60000);
+    if (!r || !Array.isArray(r.lines)) throw new Error('The server sent an older labor-budget format. Deploy the current LaborBudget.gs.');
+    LBD.data = r; LBD.key = key;
+  } catch (e) { LBD.err = e.message || 'Could not load the labor budget details.'; LBD.data = null; }
+  finally { LBD.loading = false; renderLbDetail(); }
+}
+function renderLbDetail(){
+  const box = $('lbDetail'); if (!box) return;
+  const lb = DATA.LABOR_BUDGET;
+  if (!lb || !lb.counts) { box.innerHTML = ''; return; }
+  if (!AUTH.token) {
+    box.innerHTML = `<div class="lbd-wrap"><div class="meta">Sign in as a manager to see which activities went over budget.</div>
+      <button class="btn" style="margin-top:8px;" onclick="openLogin('Sign in to see labor budget details.')">Manager sign-in</button></div>`;
+    return;
+  }
+  if (LBD.loading && !LBD.data) { box.innerHTML = '<div class="lbd-wrap meta">Loading activities…</div>'; return; }
+  if (LBD.err) { box.innerHTML = `<div class="lbd-wrap"><div class="err">${esc(LBD.err)}</div><button class="btn" style="margin-top:8px;" onclick="lbdLoad(true)">Try again</button></div>`; return; }
+  if (!LBD.data) { box.innerHTML = ''; return; }
+
+  const lines = LBD.data.lines || [];
+  const over = lines.map((l, i) => ({ l, i })).filter(x => x.l.status === 'OVER')
+                    .sort((a, b) => Number(b.l.overHours || 0) - Number(a.l.overHours || 0));
+  const unavailable = lines.filter(l => l.status === 'UNAVAILABLE').length;
+  const totalOver = over.reduce((s, x) => s + Number(x.l.overHours || 0), 0);
+
+  // summary by activity type, so the biggest overruns are visible at a glance
+  const byAct = {};
+  over.forEach(({ l }) => {
+    const k = l.activity || 'Unnamed activity';
+    const o = byAct[k] || (byAct[k] = { name: k, id: l.activityId || '', n: 0, actual: 0, budget: 0, over: 0 });
+    o.n++; o.actual += Number(l.actualHours || 0); o.budget += Number(l.budgetHours || 0); o.over += Number(l.overHours || 0);
+  });
+  const acts = Object.values(byAct).sort((a, b) => b.over - a.over);
+
+  const summary = `<div class="lbd-sum">
+      <div class="lbd-chip over"><span>Activities over budget</span><b>${over.length}</b></div>
+      <div class="lbd-chip over"><span>Hours over, total</span><b>+${lbdH(totalOver)}</b></div>
+      <div class="lbd-chip"><span>Activity types over</span><b>${acts.length}</b></div>
+      <div class="lbd-chip"><span>Budget not available</span><b>${unavailable}</b></div></div>`;
+
+  const actTable = acts.length ? `<div class="lbd-sub">By activity</div>
+    <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th class="num">Times over</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>
+      ${acts.map(a => `<tr><td><b>${esc(a.name)}</b>${a.id ? `<div class="rule">${esc(a.id)}</div>` : ''}</td><td class="num">${a.n}</td><td class="num">${lbdH(a.actual)}</td><td class="num">${lbdH(a.budget)}</td><td class="num over">+${lbdH(a.over)}</td></tr>`).join('')}
+    </tbody></table></div>` : '';
+
+  const sessRows = over.map(({ l, i }) => `<tr>
+      <td><button class="lbd-link" onclick="lbdOpen(${i})">${esc(l.activity || 'Activity')}</button>
+        <div class="rule">${esc(l.activityId || '')}${l.budgetRule ? ' · ' + esc(l.budgetRule) : ''}</div></td>
+      <td>${esc(l.worker || '')}</td>
+      <td>${esc(l.completed || '')}</td>
+      <td class="num">${lbdH(l.actualHours)}</td>
+      <td class="num">${lbdH(l.budgetHours)}</td>
+      <td class="num over">+${lbdH(l.overHours)}</td></tr>`).join('');
+  const sessTable = over.length
+    ? `<div class="lbd-sub">Over budget, by activity (click an activity to see actual vs budget)</div>
+       <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th>Worker</th><th>Completed</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>${sessRows}</tbody></table></div>`
+    : `<div class="meta" style="margin-top:12px;">No activities went over budget in this period.</div>`;
+
+  box.innerHTML = `<div class="lbd-wrap">
+      <div class="lbd-head"><h3>Activities over budget</h3><button class="lbd-link" onclick="lbdLoad(true)">Refresh</button></div>
+      ${summary}${actTable}${sessTable}</div>`;
+}
+/* Activity profile with the budget comparison for one completed line. */
+function lbdBudgetHtml(l){
+  const ok = l.status !== 'UNAVAILABLE';
+  const state = l.status === 'OVER' ? `<span class="over">+${lbdH(l.overHours)} over budget</span>`
+              : l.status === 'UNDER' ? `${lbdH(l.underHours)} under budget`
+              : l.status === 'AT' ? 'Matches budget' : 'Budget not available';
+  return `<div style="font-weight:700;font-size:15px;">${esc(l.activity || 'Activity')}</div>
+    <div class="meta" style="margin-bottom:8px;">${esc(l.activityId || '')} · ${esc(l.worker || '')} · completed ${esc(l.completed || '')}</div>
+    <div class="lbd-sum" style="margin:0 0 6px;">
+      <div class="lbd-chip"><span>Actual hours</span><b>${lbdH(l.actualHours)}</b></div>
+      <div class="lbd-chip"><span>Budget hours</span><b>${ok ? lbdH(l.budgetHours) : '—'}</b></div>
+      <div class="lbd-chip ${l.status === 'OVER' ? 'over' : ''}"><span>Result</span><b style="font-size:13px;">${state}</b></div></div>
+    <div class="meta">Budget rule: ${esc(l.budgetRule || 'none')}${!ok && l.reason ? ' · ' + esc(l.reason) : ''}</div>`;
+}
+async function lbdOpen(i){
+  const l = (LBD.data && LBD.data.lines || [])[i]; if (!l) return;
+  const dlg = $('profDlg'), body = $('profBody');
+  const sid = String(l.sessionId || l.session_id || l.Session_ID || '').trim();
+  body.innerHTML = lbdBudgetHtml(l) + (sid
+    ? '<div class="meta" style="margin-top:12px;">Loading the activity profile…</div>'
+    : '<div class="meta" style="margin-top:12px;">This line has no session ID, so the full activity profile cannot be opened from here.</div>');
+  dlg.showModal();
+  if (!sid) return;
+  try { body.innerHTML = lbdBudgetHtml(l) + '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">' + renderActProfile(await api('get-activity-profile', { sessionId: sid }, 30000)) + '</div>'; }
+  catch (e) { body.innerHTML = lbdBudgetHtml(l) + `<div class="err" style="margin-top:12px;">${esc(e.message || 'Could not load the activity profile.')}</div>`; }
+}
 function renderAuth(){
   $('authBlock').innerHTML = AUTH.token
     ? `${esc(AUTH.name||AUTH.id)} · <button class="refresh-btn" onclick="signOut()">Sign out</button>`
     : `<button class="btn" onclick="openLogin()">Manager sign-in</button>`;
+  renderLbDetail(); lbdLoad(false);
 }
 function openLogin(msg){ $('liErr').textContent = msg||''; $('liPin').value=''; $('loginDlg').showModal(); $('liId').focus(); }
 async function doLogin(){
