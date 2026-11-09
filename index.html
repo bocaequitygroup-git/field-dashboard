@@ -79,6 +79,9 @@
     footer{padding:5px 14px;}
     .kpi-grid{grid-template-columns:repeat(4,minmax(110px,1fr)) minmax(300px,2.6fr);gap:10px;margin:0;}
     .kpi-grid .kpi.wide{grid-column:auto;}
+    .kpi.wide{max-height:42vh;overflow:auto;}   /* the labor drill-down scrolls inside its own card instead of growing the strip and crushing the panels below */
+    .kpi-grid:has(.kpi.lb-open){align-items:start;}
+    .kpi.wide .lbd-scroll{max-height:none;overflow:visible;}
     .kpi{padding:8px 12px;}
     .kpi .value{font-size:22px;margin-top:2px;}
     .kpi .meta{font-size:11px;}
@@ -626,7 +629,8 @@ async function api(action, payload, timeoutMs){
 /* ---------- Labor hours vs budget: activities over budget (manager sign-in) ----------
  * Counts come from DATA.LABOR_BUDGET (public, counts only). The per-activity lines need a manager sign-in: get-labor-budget.
  * Each over-budget row opens the activity profile dialog with the budget comparison first, then the profile when the line has a session ID. */
-const LBD = { data: null, key: '', loading: false, err: '' };
+const LBD = { data: null, key: '', loading: false, err: '', open: false };   // collapsed by default: the full list is long and must not push the dashboard around
+function lbdToggle(){ LBD.open = !LBD.open; renderLbDetail(); }
 function lbdH(h){ const r = Math.round(Number(h || 0) * 100) / 100; return (r % 1 ? r.toFixed(2) : r.toFixed(1)) + ' h'; }
 function lbdKey(lb){ return (lb.from || '') + '|' + (lb.to || ''); }
 async function lbdLoad(force){
@@ -695,8 +699,13 @@ function renderLbDetail(){
        <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th>Worker</th><th>Completed</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>${sessRows}</tbody></table></div>`
     : `<div class="meta" style="margin-top:12px;">No activities went over budget in this period.</div>`;
 
+  const kpiCard = box.parentElement; if (kpiCard) kpiCard.classList.toggle('lb-open', !!LBD.open);
+  if (!LBD.open) {
+    box.innerHTML = `<div class="lbd-wrap" style="padding-top:8px;margin-top:4px;"><button class="lbd-link" onclick="lbdToggle()">&#9656; Show activities over budget (${over.length})</button></div>`;
+    return;
+  }
   box.innerHTML = `<div class="lbd-wrap">
-      <div class="lbd-head"><h3>Activities over budget</h3><button class="lbd-link" onclick="lbdLoad(true)">Refresh</button></div>
+      <div class="lbd-head"><h3>Activities over budget</h3><span><button class="lbd-link" onclick="lbdLoad(true)">Refresh</button> &nbsp; <button class="lbd-link" onclick="lbdToggle()">Hide</button></span></div>
       ${summary}${actTable}${sessTable}</div>`;
 }
 /* Activity profile with the budget comparison for one completed line. */
