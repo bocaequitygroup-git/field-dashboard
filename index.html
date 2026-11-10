@@ -97,14 +97,15 @@
   /* Desktop: everything fits one screen. KPIs become one strip, the six panel areas share the remaining height,
      and each panel scrolls inside itself, so the page never needs to scroll. Smaller screens keep the stacked layout. */
   @media (min-width:1100px) and (min-height:620px){
-    html,body{height:100%;}
-    body{display:flex;flex-direction:column;overflow:hidden;}
+    /* The page scrolls. The Bed & Cohort State block above made the old one-screen lock crush the panels, so each panel row now has a fixed
+       comfortable height and scrolls inside itself, and the page scrolls down to the next row. */
+    body{display:block;}
     header.topbar{padding:8px 16px;}
-    main{flex:1;min-height:0;width:100%;max-width:none;padding:10px 14px;display:flex;flex-direction:column;gap:10px;}
+    main{width:100%;max-width:none;padding:10px 14px;display:flex;flex-direction:column;gap:10px;}
     footer{padding:5px 14px;}
     .kpi-grid{grid-template-columns:repeat(4,minmax(110px,1fr)) minmax(300px,2.6fr);gap:10px;margin:0;}
     .kpi-grid .kpi.wide{grid-column:auto;}
-    .kpi.wide{max-height:42vh;overflow:auto;}   /* the labor drill-down scrolls inside its own card instead of growing the strip and crushing the panels below */
+    .kpi.wide{max-height:60vh;overflow:auto;}   /* the labor drill-down scrolls inside its own card instead of growing the strip and crushing the panels below */
     .kpi-grid:has(.kpi.lb-open){align-items:start;}
     .kpi.wide .lbd-scroll{max-height:none;overflow:visible;}
     .kpi{padding:8px 12px;}
@@ -112,7 +113,7 @@
     .kpi .meta{font-size:11px;}
     .lb-row{gap:22px;flex-wrap:nowrap;}
     .lb-row .value{font-size:20px;}
-    .panel-grid{flex:1;min-height:0;grid-template-columns:1.05fr 1fr 1.15fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:10px;}
+    .panel-grid{grid-template-columns:1.05fr 1fr 1.15fr;grid-template-rows:minmax(0,440px) minmax(0,440px);gap:10px;}
     .panel-grid > .panel, .panel-grid > .stack > .panel{display:flex;flex-direction:column;min-height:0;}
     .stack{grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:10px;min-height:0;}
     .panel-head{padding:7px 12px;flex:none;}
