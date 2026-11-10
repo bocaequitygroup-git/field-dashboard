@@ -772,19 +772,20 @@ function lbdBedOf(l){
 }
 /* Last resort when the server line has neither a bed nor a session ID: match a completed session by activity + worker name + completion
    day, and when several beds fit, take the one whose elapsed time is closest to the line's actual hours. */
-function lbdGuessBed(l){
+function lbdGuessBed(l){ const s = lbdGuessSession(l); return s ? String(s.Bed_ID||'').trim() : ''; }
+function lbdGuessSession(l){
   try{
     const users = DATA.USERS || [], nameOf = (id) => { const u = users.find(u => String(u.Worker_ID||'').toLowerCase() === String(id||'').toLowerCase()); return u ? u.Name : id; };
     const day = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
     const want = String(l.completed || '').slice(0,10), act = String(l.activity || '').trim(), who = String(l.worker || '').trim().toLowerCase();
     const c = (DATA.FIELD_LIVE_SESSION || []).filter(s => String(s.Status||'').toUpperCase() === 'COMPLETED' && String(s.Activity_Name||'').trim() === act &&
       String(nameOf(s.Worker_ID)||'').trim().toLowerCase() === who && day(s.End_Time) === want);
-    if(!c.length) return '';
-    if(new Set(c.map(s => String(s.Bed_ID||'').trim())).size === 1) return String(c[0].Bed_ID||'').trim();
+    if(!c.length) return null;
+    if(c.length === 1) return c[0];
     const hrs = Number(l.actualHours || 0), el = (s) => { const a = new Date(s.Start_Time), b = new Date(s.End_Time); return isNaN(a)||isNaN(b) ? 1e9 : Math.abs((b - a)/3600000 - hrs); };
     c.sort((a,b) => el(a) - el(b));
-    return el(c[0]) < 0.05 ? String(c[0].Bed_ID||'').trim() : '';
-  }catch(e){ return ''; }
+    return el(c[0]) < 0.05 ? c[0] : null;
+  }catch(e){ return null; }
 }
 function lbdBlockOf(l, bed){
   const direct = String(l.blockId || l.block || l.Block_ID || '').trim(); if(direct) return direct;
@@ -795,6 +796,29 @@ function lbdBlockOf(l, bed){
 }
 function lbdSet(k, v){ LBD.f[k] = v; if(k === 'block') LBD.f.bed = ''; renderLbDetail(); }
 function lbdClear(){ LBD.f = { block: '', bed: '', activity: '', worker: '' }; renderLbDetail(); }
+LBD.exp = {}; LBD.fromBed = '';
+function lbdExp(name){ LBD.exp[name] = !LBD.exp[name]; renderLbDetail(); }
+const lbdBedLink = (b) => b ? `<button class="lbd-link" data-b="${attr(b)}" onclick="lbdBed(this.dataset.b)" title="Hours for bed ${attr(b)}">${esc(b)}</button>` : '—';
+/* Bed hours board: every labor-budget line of this bed in the loaded period (over, under, at budget), each opening its activity profile. */
+function lbdBed(bed){
+  const lines = ((LBD.data && LBD.data.lines) || []).map((l, i) => ({ l, i })).filter(x => lbdBedOf(x.l) === bed);
+  const dlg = $('profDlg'), body = $('profBody'), lb = DATA.LABOR_BUDGET || {};
+  LBD.fromBed = bed;
+  if(!lines.length){ body.innerHTML = `<div style="font-weight:700;font-size:15px;">Bed ${esc(bed)}</div><div class="meta" style="margin-top:8px;">No labor lines for this bed in ${esc(lb.from || '')} to ${esc(lb.to || '')}.</div>`; if(!dlg.open) dlg.showModal(); return; }
+  const sum = (k) => lines.reduce((s, x) => s + Number(x.l[k] || 0), 0);
+  const actual = sum('actualHours'), budget = lines.reduce((s, x) => s + (x.l.status === 'UNAVAILABLE' ? 0 : Number(x.l.budgetHours || 0)), 0), over = sum('overHours');
+  const blk = lbdBlockOf(lines[0].l, bed);
+  const st = (l) => l.status === 'OVER' ? `<span class="over">+${lbdH(l.overHours)}</span>` : l.status === 'UNDER' ? lbdH(l.underHours) + ' under' : l.status === 'AT' ? 'On budget' : 'No budget';
+  const rows = lines.sort((a, b) => String(b.l.completed || '').localeCompare(String(a.l.completed || ''))).map(({ l, i }) => `<tr>
+      <td><button class="lbd-link" onclick="lbdOpen(${i}, true)">${esc(l.activity || 'Activity')}</button><div class="rule">${esc(l.activityId || '')}</div></td>
+      <td>${esc(l.worker || '')}</td><td>${esc(l.completed || '')}</td><td class="num">${lbdH(l.actualHours)}</td><td class="num">${l.status === 'UNAVAILABLE' ? '—' : lbdH(l.budgetHours)}</td><td class="num">${st(l)}</td></tr>`).join('');
+  body.innerHTML = `<div style="font-weight:700;font-size:15px;">Bed ${esc(bed)}${blk ? ' · ' + esc(blk) : ''}</div>
+    <div class="meta" style="margin-bottom:8px;">Labor hours ${esc(lb.from || '')} to ${esc(lb.to || '')} · click an activity for its full profile</div>
+    <div class="lbd-sum" style="margin:0 0 8px;"><div class="lbd-chip"><span>Actual</span><b>${lbdH(actual)}</b></div><div class="lbd-chip"><span>Budget</span><b>${lbdH(budget)}</b></div><div class="lbd-chip ${over ? 'over' : ''}"><span>Over by</span><b>${over ? '+' + lbdH(over) : '—'}</b></div></div>
+    <div class="lbd-scroll" style="max-height:300px;"><table class="lbd-tbl"><thead><tr><th>Activity</th><th>Worker</th><th>Completed</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="bar" style="margin-top:10px;"><button class="btn secondary" type="button" onclick="$('profDlg').close();LBD.f.bed=this.dataset.b;LBD.f.block='';LBD.open=true;renderLbDetail();" data-b="${attr(bed)}">Filter the list to this bed</button></div>`;
+  if(!dlg.open) dlg.showModal();
+}
 const lbdNum = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });   // collapsed by default: the full list is long and must not push the dashboard around
 function lbdToggle(){ LBD.open = !LBD.open; renderLbDetail(); }
 function lbdH(h){ const r = Math.round(Number(h || 0) * 100) / 100; return (r % 1 ? r.toFixed(2) : r.toFixed(1)) + ' h'; }
@@ -864,15 +888,18 @@ function renderLbDetail(){
   const actTable = acts.length ? `<div class="lbd-sub">By activity</div>
     <div class="lbd-scroll"><table class="lbd-tbl"><thead><tr><th>Activity</th><th>Block</th><th>Bed</th><th class="num">Times over</th><th class="num">Actual</th><th class="num">Budget</th><th class="num">Over by</th></tr></thead><tbody>
       ${acts.map(a => { const bl = Object.keys(a.blocks).sort(lbdNum), bd = Object.keys(a.beds).sort(lbdNum);
-        const lst = (arr, max) => arr.length ? esc(arr.slice(0, max).join(', ')) + (arr.length > max ? ` <span class="rule" title="${attr(arr.join(', '))}">+${arr.length - max} more</span>` : '') : '—';
-        return `<tr><td><b>${esc(a.name)}</b>${a.id ? `<div class="rule">${esc(a.id)}</div>` : ''}</td><td>${lst(bl, 4)}</td><td>${lst(bd, 4)}</td><td class="num">${a.n}</td><td class="num">${lbdH(a.actual)}</td><td class="num">${lbdH(a.budget)}</td><td class="num over">+${lbdH(a.over)}</td></tr>`; }).join('')}
+        const open = !!LBD.exp[a.name], max = 4;
+        const more = (arr) => arr.length > max ? ` <button class="lbd-link" data-a="${attr(a.name)}" onclick="lbdExp(this.dataset.a)">${open ? 'show less' : '+' + (arr.length - max) + ' more'}</button>` : '';
+        const bedsHtml = bd.length ? (open ? bd : bd.slice(0, max)).map(lbdBedLink).join(', ') + more(bd) : '—';
+        const blkHtml = bl.length ? bl.map(b => `<button class="lbd-link" data-b="${attr(b)}" onclick="lbdSet('block', this.dataset.b)" title="Filter to ${attr(b)}">${esc(b)}</button>`).join(', ') : '—';
+        return `<tr><td><b>${esc(a.name)}</b>${a.id ? `<div class="rule">${esc(a.id)}</div>` : ''}</td><td>${blkHtml}</td><td>${bedsHtml}</td><td class="num">${a.n}</td><td class="num">${lbdH(a.actual)}</td><td class="num">${lbdH(a.budget)}</td><td class="num over">+${lbdH(a.over)}</td></tr>`; }).join('')}
     </tbody></table></div>` : '';
 
   const sessRows = over.map(({ l, i, bed, block }) => `<tr>
       <td><button class="lbd-link" onclick="lbdOpen(${i})">${esc(l.activity || 'Activity')}</button>
         <div class="rule">${esc(l.activityId || '')}${l.budgetRule ? ' · ' + esc(l.budgetRule) : ''}</div></td>
       <td>${esc(block || '—')}</td>
-      <td>${esc(bed || '—')}</td>
+      <td>${lbdBedLink(bed)}</td>
       <td>${esc(l.worker || '')}</td>
       <td>${esc(l.completed || '')}</td>
       <td class="num">${lbdH(l.actualHours)}</td>
@@ -906,17 +933,19 @@ function lbdBudgetHtml(l){
       <div class="lbd-chip ${l.status === 'OVER' ? 'over' : ''}"><span>Result</span><b style="font-size:13px;">${state}</b></div></div>
     <div class="meta">Budget rule: ${esc(l.budgetRule || 'none')}${!ok && l.reason ? ' · ' + esc(l.reason) : ''}</div>`;
 }
-async function lbdOpen(i){
+async function lbdOpen(i, fromBed){
+  if(!fromBed) LBD.fromBed = '';
+  const back = () => LBD.fromBed ? `<div class="bar" style="margin-bottom:10px;"><button class="btn secondary" type="button" data-b="${attr(LBD.fromBed)}" onclick="lbdBed(this.dataset.b)">&larr; Back to bed ${esc(LBD.fromBed)}</button></div>` : '';
   const l = (LBD.data && LBD.data.lines || [])[i]; if (!l) return;
   const dlg = $('profDlg'), body = $('profBody');
-  const sid = String(l.sessionId || l.session_id || l.Session_ID || '').trim();
-  body.innerHTML = lbdBudgetHtml(l) + (sid
+  const sid = String(l.sessionId || l.session_id || l.Session_ID || '').trim() || (lbdGuessSession(l) || {}).Session_ID || '';
+  body.innerHTML = back() + lbdBudgetHtml(l) + (sid
     ? '<div class="meta" style="margin-top:12px;">Loading the activity profile…</div>'
     : '<div class="meta" style="margin-top:12px;">This line has no session ID, so the full activity profile cannot be opened from here.</div>');
-  dlg.showModal();
+  if(!dlg.open) dlg.showModal();
   if (!sid) return;
-  try { body.innerHTML = lbdBudgetHtml(l) + '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">' + renderActProfile(await api('get-activity-profile', { sessionId: sid }, 30000)) + '</div>'; }
-  catch (e) { body.innerHTML = lbdBudgetHtml(l) + `<div class="err" style="margin-top:12px;">${esc(e.message || 'Could not load the activity profile.')}</div>`; }
+  try { body.innerHTML = back() + lbdBudgetHtml(l) + '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">' + renderActProfile(await api('get-activity-profile', { sessionId: sid }, 30000)) + '</div>'; }
+  catch (e) { body.innerHTML = back() + lbdBudgetHtml(l) + `<div class="err" style="margin-top:12px;">${esc(e.message || 'Could not load the activity profile.')}</div>`; }
 }
 function renderAuth(){
   $('authBlock').innerHTML = AUTH.token
