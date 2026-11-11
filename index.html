@@ -451,20 +451,31 @@ function renderStateSummary(beds, cohortProd, caq){
     : caq.filter(q => up(q.Status) === 'EXCEPTION' && up(q.Exception_Type) === 'PLAN_BED_UNAVAILABLE').length;
   const proposed = ARb ? Number(ARb.PROPOSED || 0) : caq.filter(q => up(q.Status) === 'PROPOSED').length;
   const otherPlanned = Math.max(0, planned - waitRelease - proposed);
+  // Shortfall Crop cohorts (UrgentProduction.gs). SHORTFALL CROP is the current designation; URGENT PRODUCTION is the
+  // legacy tag the feature used before its rename, and Production_Source SHORTFALL is set by older rows too.
+  const isShortfall = (c) => { const d = up(c.Production_Designation), s = up(c.Production_Source); return d === 'SHORTFALL CROP' || d === 'URGENT PRODUCTION' || s === 'SHORTFALL'; };
+  const shortfallLive = real.filter(c => isShortfall(c) && ['ACTIVE','WAITING_NEXT_PICK','PRE_PLANTING','PLANNED'].indexOf(up(c.Cohort_Status)) !== -1);
   const coh = [
     { l:'Growing in field', n:active + wnp, c:'#2f9e5f', d:active + ' growing · ' + wnp + ' between picks' },
     { l:'Staged', n:pre, c:'#5aa9ff', d:'Bed assigned, awaiting Verify Planting' },
     { l:'Awaiting bed release', n:waitRelease, c:'#e0a030', d:'Planned bed still in turnover' },
     { l:'Bed proposed', n:proposed, c:'#d9c13a', d:'Waiting for manager approval' },
-    { l:'Planned, no bed yet', n:otherPlanned, c:'#8a948d', d:'Not yet proposed or needs a decision' }
+    { l:'Planned, no bed yet', n:otherPlanned, c:'#8a948d', d:'Not yet proposed or needs a decision' },
+    { l:'Shortfall crop', n:shortfallLive.length, c:'#B4231A', d:'Unexpected-demand cohorts, tagged Shortfall Crop' }
   ];
   const cohTiles = coh.map(c => `<div class="ss-tile" style="--c:${c.c}"><div class="n">${c.n}</div><div class="l">${esc(c.l)}</div><div class="d">${esc(c.d)}</div></div>`).join('');
+  const sfRows = shortfallLive.slice(0, 40).map(c => `<tr><td><b>${esc(c.Crop_Name || c.Crop_ID || '')}</b></td><td>${esc(c.Cohort_ID || '')}</td><td>${esc(c.Location_ID || '—')}</td><td>${esc(String(c.Cohort_Status || '').replace(/_/g,' '))}</td></tr>`).join('');
+  const sfMore = shortfallLive.length > 40 ? `<div class="ss-note">+${shortfallLive.length - 40} more</div>` : '';
+  const sfDetails = shortfallLive.length
+    ? `<details class="ss-blocks" open><summary>Shortfall crop cohorts (${shortfallLive.length})</summary><table><thead><tr><th>Crop</th><th>Cohort</th><th>Bed</th><th>Status</th></tr></thead><tbody>${sfRows}</tbody></table>${sfMore}</details>`
+    : '';
 
   const cols = SS_BED_CATS.map(c => c.k);
   const rows = Object.keys(byBlock).sort(lbdNum).map(b => `<tr><td><b>${esc(b)}</b></td><td>${byBlock[b].total}</td>${cols.map(k => `<td>${byBlock[b][k]||0}</td>`).join('')}</tr>`).join('');
   box.innerHTML = `<div class="ss-head"><h2>Bed &amp; Cohort State</h2><span class="ss-note">${total} beds · ${real.length} cohorts · live from BED_MASTER and COHORT_PRODUCTION</span></div>
     <div class="ss-sub" style="margin-top:4px;">Beds</div><div class="ss-bar">${bar}</div><div class="ss-tiles">${bedTiles}</div>
     <div class="ss-sub">Cohorts</div><div class="ss-tiles">${cohTiles}</div>
+    ${sfDetails}
     <details class="ss-blocks"><summary>Bed status by block</summary><table><thead><tr><th>Block</th><th>Beds</th>${SS_BED_CATS.map(c => `<th>${esc(c.label.split(' / ')[0])}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></details>`;
 }
 function computeAll(){
