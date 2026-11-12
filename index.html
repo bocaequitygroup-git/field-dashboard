@@ -1012,16 +1012,22 @@ function readyBeds(){
   if(VS) return (VS.readyBeds||[]).map(r=>({id:r.bedId, postHarvest:{bedLevel:String(r.scope).indexOf('BED:')===0, cohortId:r.cohortId}}));
   return ((TODAY&&TODAY.beds)||[]).filter(b=>b.postHarvest && b.postHarvest.readyToVerify===true); }
 
-/* Default planting date for a planting cohort (same rule as field_managerapp): the date the manager scheduled on the completed
-   Transplanting / DirectSeeding session (Scheduled_Date); only if none is on file, the day it was completed. Falls back to blank. */
+/* Default planting date for a planting cohort (same rule as field_managerapp):
+   1. a COMPLETED Transplanting / DirectSeeding / Replanting session: the date the manager scheduled on it (Scheduled_Date), else the day it was completed;
+   2. else the Scheduled_Date of an open (assigned / running, not cancelled) planting session, only if that day is not in the future
+      (the crop cannot be verified in the ground before the day it is scheduled for);
+   3. else `fallback` (blank). Planned_DOB is never used: for a shortfall crop it is the start of the allowable window, often months ahead. */
 function plantingDefaultIso(c, fallback){
   const day=v=>{ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1];
     const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
-  const rows=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1 && String(s.Status||'').toUpperCase()==='COMPLETED');
-  if(!rows.length) return fallback;
-  rows.sort((a,b)=>new Date(b.End_Time||b.Start_Time||0)-new Date(a.End_Time||a.Start_Time||0));
-  for(const r of rows){ const d=day(r.Scheduled_Date)||day(r.End_Time)||day(r.Start_Time); if(d) return d; }
-  return fallback;
+  const t=new Date(), today=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+  const all=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1);
+  const done=all.filter(s=>String(s.Status||'').toUpperCase()==='COMPLETED');
+  done.sort((a,b)=>new Date(b.End_Time||b.Start_Time||0)-new Date(a.End_Time||a.Start_Time||0));
+  for(const r of done){ const d=day(r.Scheduled_Date)||day(r.End_Time)||day(r.Start_Time); if(d) return d; }
+  const open=all.filter(s=>!/^(COMPLETED|CANCELLED|CANCELED)/.test(String(s.Status||'').toUpperCase()) && day(s.Scheduled_Date) && day(s.Scheduled_Date)<=today)
+    .map(s=>day(s.Scheduled_Date)).sort();
+  return open.length ? open[open.length-1] : fallback;
 }
 function renderPending(){
   const acts = pendingActivities(), ready = readyBeds(), signed = !!AUTH.token;
