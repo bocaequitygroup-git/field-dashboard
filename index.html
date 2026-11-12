@@ -505,9 +505,11 @@ function computeAll(){
   const totalBeds = VS ? VS.bedStatus.total : beds.length;
 
   // Plantings awaiting manager verification: assigned (Location_ID) cohorts in PRE_PLANTING with no Actual_DOB.
-  const plantingsPending = VS
+  const plantingsAll = VS
     ? (VS.plantings||[]).map(p => ({ Location_ID: p.bedId, Crop_Name: p.crop, Cohort_ID: p.cohortId, Planned_DOB: p.plannedDob }))
     : cohortProd.filter(c => String(c.Cohort_Status||'').trim().toUpperCase() === 'PRE_PLANTING' && c.Location_ID && !c.Actual_DOB);
+  const plantingsPending = plantingsAll.filter(c => hasCompletedPlanting(c.Cohort_ID));   // staged but not yet planted: not ready to verify
+  const plantingsHidden = plantingsAll.length - plantingsPending.length;
 
   // Beds that block a PROPOSED assignment because nobody has verified them ready.
   const bedById = {}; beds.forEach(b => { bedById[String(b.Bed_ID).trim().toUpperCase()] = b; });
@@ -527,7 +529,7 @@ function computeAll(){
   const proposedN = caq.filter(c => (c.Status||'').toUpperCase() === 'PROPOSED').length;
 
   $('kpiBeds').innerHTML = `${verifiedReady} <small>of ${totalBeds}</small>`;
-  $('kpiPending').textContent = VS ? VS.counts.total : plantingsPending.length + blockers.length;
+  $('kpiPending').textContent = VS ? Math.max(0, VS.counts.total - plantingsHidden) : plantingsPending.length + blockers.length;
   $('kpiExceptions').textContent = openExceptions.length;
   $('kpiStaged').textContent = cohortsStaged.length;
   // The Assignment Board's "exceptions" are cohorts blocked by a bed still in turnover, NOT field exceptions (server: AssignmentReconcile.gs).
@@ -552,7 +554,7 @@ function computeAll(){
 
   renderStateSummary(beds, cohortProd, caq);
   renderLbDetail(); lbdLoad(false);
-  PV.plant = plantingsPending; PV.block = blockers; PV.proposedN = proposedN;
+  PV.plant = plantingsPending; PV.plantHidden = plantingsHidden; PV.block = blockers; PV.proposedN = proposedN;
   renderPending();
 
   // --- Active Lifecycle Cards (verified beds, DOB-anchored) ---
@@ -1016,7 +1018,11 @@ function readyBeds(){
    1. a COMPLETED Transplanting / DirectSeeding / Replanting session: the date the manager scheduled on it (Scheduled_Date), else the day it was completed;
    2. else the Scheduled_Date of an open (assigned / running, not cancelled) planting session, only if that day is not in the future
       (the crop cannot be verified in the ground before the day it is scheduled for);
-   3. else the cohort's Planned_DOB if it is today or earlier (a future planned date, e.g. a shortfall crop's window start, is not used), else today. */
+   3. else `fallback` (blank). Planned_DOB is never used: for a shortfall crop it is the start of the allowable window, often months ahead. */
+/* A planting is only offered for verification once a planting activity for the cohort is COMPLETED. */
+function hasCompletedPlanting(cohortId){
+  return ((DATA&&DATA.FIELD_LIVE_SESSION)||[]).some(s=>s.Cohort_ID===cohortId && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1 && String(s.Status||'').toUpperCase()==='COMPLETED');
+}
 function plantingDefaultIso(c, fallback){
   const day=v=>{ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1];
     const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
@@ -1024,18 +1030,20 @@ function plantingDefaultIso(c, fallback){
   const all=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1);
   const done=all.filter(s=>String(s.Status||'').toUpperCase()==='COMPLETED');
   done.sort((a,b)=>new Date(b.End_Time||b.Start_Time||0)-new Date(a.End_Time||a.Start_Time||0));
-  for(const r of done){ const d=day(r.Scheduled_Date)||day(r.End_Time)||day(r.Start_Time); if(d) return d; }
+  for(const r of done){
+    // The box is capped at today and the server rejects future plantings: if the scheduled date is still ahead, use the day the work was actually done.
+    const sch=day(r.Scheduled_Date), fin=day(r.End_Time)||day(r.Start_Time);
+    const d=(sch && sch<=today) ? sch : (fin || sch);
+    if(d) return d;
+  }
   const open=all.filter(s=>!/^(COMPLETED|CANCELLED|CANCELED)/.test(String(s.Status||'').toUpperCase()) && day(s.Scheduled_Date) && day(s.Scheduled_Date)<=today)
     .map(s=>day(s.Scheduled_Date)).sort();
-  if(open.length) return open[open.length-1];
-  // No planting activity on file: planned DOB if it is not in the future, else the caller's fallback (the manager can still change it).
-  const pd=day(c.Planned_DOB);
-  return (pd && pd<=today) ? pd : (fallback || today);
+  return open.length ? open[open.length-1] : fallback;
 }
 function renderPending(){
   const acts = pendingActivities(), ready = readyBeds(), signed = !!AUTH.token;
   const VSn = vsNow();
-  const total = VSn ? VSn.counts.total : PV.plant.length + PV.block.length + (signed ? acts.length + ready.length : 0);
+  const total = VSn ? Math.max(0, VSn.counts.total - (PV.plantHidden||0)) : PV.plant.length + PV.block.length + (signed ? acts.length + ready.length : 0);
   $('kpiPending').textContent = total; $('pvCount').textContent = total;
   const today = new Date(); const iso = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
   const nSel = acts.filter(x=>PV.sel[x.key]).length;
