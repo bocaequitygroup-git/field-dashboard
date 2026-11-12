@@ -1016,7 +1016,7 @@ function readyBeds(){
    1. a COMPLETED Transplanting / DirectSeeding / Replanting session: the date the manager scheduled on it (Scheduled_Date), else the day it was completed;
    2. else the Scheduled_Date of an open (assigned / running, not cancelled) planting session, only if that day is not in the future
       (the crop cannot be verified in the ground before the day it is scheduled for);
-   3. else `fallback` (blank). Planned_DOB is never used: for a shortfall crop it is the start of the allowable window, often months ahead. */
+   3. else the cohort's Planned_DOB if it is today or earlier (a future planned date, e.g. a shortfall crop's window start, is not used), else today. */
 function plantingDefaultIso(c, fallback){
   const day=v=>{ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1];
     const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
@@ -1027,7 +1027,10 @@ function plantingDefaultIso(c, fallback){
   for(const r of done){ const d=day(r.Scheduled_Date)||day(r.End_Time)||day(r.Start_Time); if(d) return d; }
   const open=all.filter(s=>!/^(COMPLETED|CANCELLED|CANCELED)/.test(String(s.Status||'').toUpperCase()) && day(s.Scheduled_Date) && day(s.Scheduled_Date)<=today)
     .map(s=>day(s.Scheduled_Date)).sort();
-  return open.length ? open[open.length-1] : fallback;
+  if(open.length) return open[open.length-1];
+  // No planting activity on file: planned DOB if it is not in the future, else the caller's fallback (the manager can still change it).
+  const pd=day(c.Planned_DOB);
+  return (pd && pd<=today) ? pd : (fallback || today);
 }
 function renderPending(){
   const acts = pendingActivities(), ready = readyBeds(), signed = !!AUTH.token;
