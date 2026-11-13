@@ -1023,10 +1023,20 @@ function readyBeds(){
 function hasCompletedPlanting(cohortId){
   return ((DATA&&DATA.FIELD_LIVE_SESSION)||[]).some(s=>s.Cohort_ID===cohortId && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1 && String(s.Status||'').toUpperCase()==='COMPLETED');
 }
+function pvDay_(v){ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1]; const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+/* One line under the cohort: what the manager selected at assignment (and whether it was accepted outside the window). */
+function pvSelMeta(c, today){
+  const s=pvDay_(c.Selected_Planting_Date); let m=esc(c.Cohort_ID)+' · planned '+fmtDate(c.Planned_DOB);
+  if(s) m+=' · you selected '+fmtDate(c.Selected_Planting_Date)+(s>today?' (not reached yet)':'')+(String(c.Selected_Exception_Accepted).toUpperCase()==='TRUE'?' · outside window, accepted':'');
+  return m;
+}
 function plantingDefaultIso(c, fallback){
   const day=v=>{ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1];
     const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   const t=new Date(), today=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+  /* 0. The date the manager SELECTED when assigning the planting (COHORT_PRODUCTION.Selected_Planting_Date, PlantingSelection.gs) once that day has arrived.
+        A selected date still ahead is never offered: the crop cannot be in the ground yet and the server refuses a future planting date. */
+  const selIso=day(c&&c.Selected_Planting_Date); if(selIso && selIso<=today) return selIso;
   const all=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1);
   const done=all.filter(s=>String(s.Status||'').toUpperCase()==='COMPLETED');
   done.sort((a,b)=>new Date(b.End_Time||b.Start_Time||0)-new Date(a.End_Time||a.Start_Time||0));
@@ -1060,8 +1070,8 @@ function renderPending(){
 
   h += `<div class="sub-h">Plantings to verify (${PV.plant.length})</div>`;
   h += PV.plant.length ? `<div class="card-row">`+PV.plant.map(c=>`
-      <div class="item-card"><div class="left"><b>${esc(c.Location_ID)} · ${esc(c.Crop_Name||c.Crop_ID)}</b><div class="meta">${esc(c.Cohort_ID)} · planned ${fmtDate(c.Planned_DOB)}</div></div>
-        <div style="display:flex;gap:6px;align-items:center;"><input class="inline-in" type="date" id="dob_${attr(c.Cohort_ID)}" value="${plantingDefaultIso(c, '')}" max="${iso}">
+      <div class="item-card"><div class="left"><b>${esc(c.Location_ID)} · ${esc(c.Crop_Name||c.Crop_ID)}</b><div class="meta">${pvSelMeta(c, iso)}</div></div>
+        <div style="display:flex;gap:6px;align-items:center;"><input class="inline-in" type="date" id="dob_${attr(c.Cohort_ID)}" value="${plantingDefaultIso(c, '')}" max="${iso}" oninput="this.dataset.touched='1'">
         <button class="btn" data-c="${attr(c.Cohort_ID)}" onclick="pvPlant(this.dataset.c)">Verify planting</button></div></div>`).join('')+`</div>`
     : `<div class="empty">None. A cohort appears here once its assignment is approved.</div>`;
 
@@ -1080,11 +1090,26 @@ function renderPending(){
   h += `<div class="note" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">Verify any bed by ID (it must be empty, cleared and checked):
       <input class="inline-in" id="vbBedId" placeholder="B1-01" style="width:80px;"><button class="btn" onclick="pvBed($('vbBedId').value.trim())">Verify bed ready</button></div>`;
   h += `<div class="note">Assignments awaiting approval: ${PV.proposedN}. Approve or change them in ranch_aab (Cohort Board).</div>`;
-  $('pvBody').innerHTML = h;
+  $('pvBody').innerHTML = h; pvApplyServerDefaults();
+}
+/* ONE verification default, from the server (check-planting -> verificationDefault, PlantingSelection.gs). plantingDefaultIso above only fills the box
+   until the server answers (or if it cannot); a date the manager has already typed is never replaced. */
+function pvApplyServerDefaults(){
+  if(!AUTH.token) return;
+  PV.sd = PV.sd || {}; PV.sdBusy = PV.sdBusy || {};
+  const t=new Date(), today=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+  (PV.plant||[]).forEach(c=>{
+    const id=c.Cohort_ID;
+    const put=()=>{ const e=$('dob_'+id), r=PV.sd[id], vd=r&&r.verificationDefault; if(e && vd && !e.dataset.touched) e.value=(vd.date && vd.date<=today)?vd.date:''; };
+    if(PV.sd[id]){ put(); return; }
+    if(!$('dob_'+id) || PV.sdBusy[id]) return;
+    PV.sdBusy[id]=true;
+    api('check-planting',{cohortId:id}).then(r=>{ PV.sd[id]=r||{}; put(); }).catch(()=>{}).then(()=>{ PV.sdBusy[id]=false; });
+  });
 }
 function pvTog(k,on){ if(on) PV.sel[k]=true; else delete PV.sel[k]; const n=pendingActivities().filter(x=>PV.sel[x.key]).length, b=$('pvGo'); if(b){ b.disabled=!n; b.textContent=n?'Verify selected ('+n+')':'Verify selected'; } }
 function pvAll(on){ PV.sel={}; if(on) pendingActivities().forEach(x=>{PV.sel[x.key]=true;}); renderPending(); }
-async function pvRefresh(){ await Promise.all([loadFeed(), loadToday()]); }
+async function pvRefresh(){ PV.sd={}; await Promise.all([loadFeed(), loadToday()]); }
 let pvToastTimer=null;
 function pvProgress(kind, msg, ms){
   const t=$('pvToast'); clearTimeout(pvToastTimer);
@@ -1126,7 +1151,11 @@ function pvVerify(){
 async function pvPlant(cohortId){
   if(needAuth() || PV.busy) return;
   const el=$('dob_'+cohortId), dob=el&&el.value; if(!dob){ alert('Choose the planting date.'); return; }
-  if(!confirm('Verify planting of '+cohortId+' on '+dob+'? This starts the crop clock and irrigation schedule.')) return;
+  /* Compare with the date the manager selected at assignment, so the manager decides with the reference in front of them. */
+  const co=((DATA&&DATA.COHORT_PRODUCTION)||[]).find(x=>x.Cohort_ID===cohortId), sel=(PV.sd&&PV.sd[cohortId]&&PV.sd[cohortId].selection&&PV.sd[cohortId].selection.selectedDate)||(co?pvDay_(co.Selected_Planting_Date):'');
+  let cmp=''; if(sel){ const n=Math.round((Date.UTC(+dob.slice(0,4),+dob.slice(5,7)-1,+dob.slice(8,10))-Date.UTC(+sel.slice(0,4),+sel.slice(5,7)-1,+sel.slice(8,10)))/864e5);
+    cmp='\n\nYou selected '+sel+' when you assigned this planting. '+(n?'This date is '+Math.abs(n)+' day'+(Math.abs(n)===1?'':'s')+(n>0?' after':' before')+' it.':'This date matches it.'); }
+  if(!confirm('Verify planting of '+cohortId+' on '+dob+'? This starts the crop clock and irrigation schedule.'+cmp)) return;
   let windowReason='', devReason='', propReason='', askedWin=false, askedDev=false, askedProp=false;
   for(let i=0;i<5;i++){
     const body={cohortId, actualDob:dob};
