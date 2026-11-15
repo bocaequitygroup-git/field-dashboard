@@ -1026,17 +1026,17 @@ function hasCompletedPlanting(cohortId){
 function pvDay_(v){ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1]; const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /* One line under the cohort: what the manager selected at assignment (and whether it was accepted outside the window). */
 function pvSelMeta(c, today){
-  const s=pvDay_(c.Selected_Planting_Date); let m=esc(c.Cohort_ID)+' · planned '+fmtDate(c.Planned_DOB);
-  if(s) m+=' · you selected '+fmtDate(c.Selected_Planting_Date)+(s>today?' (not reached yet)':'')+(String(c.Selected_Exception_Accepted).toUpperCase()==='TRUE'?' · outside window, accepted':'');
+  const s=pvDay_(c.Manager_Selected_Planting_Date); let m=esc(c.Cohort_ID)+' · planned '+fmtDate(c.Planned_DOB);
+  if(s) m+=' · you selected '+fmtDate(c.Manager_Selected_Planting_Date)+(s>today?' (not reached yet)':'')+(String(c.Selected_Exception_Accepted).toUpperCase()==='TRUE'?' · outside window, accepted':'');
   return m;
 }
 function plantingDefaultIso(c, fallback){
   const day=v=>{ if(v===''||v==null) return ''; const m=/^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?$)/.exec(String(v)); if(m) return m[1];
     const d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   const t=new Date(), today=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
-  /* 0. The date the manager SELECTED when assigning the planting (COHORT_PRODUCTION.Selected_Planting_Date, PlantingSelection.gs) once that day has arrived.
+  /* 0. The date the manager SELECTED when assigning the planting (COHORT_PRODUCTION.Manager_Selected_Planting_Date, PlantingSelection.gs) once that day has arrived.
         A selected date still ahead is never offered: the crop cannot be in the ground yet and the server refuses a future planting date. */
-  const selIso=day(c&&c.Selected_Planting_Date); if(selIso && selIso<=today) return selIso;
+  const selIso=day(c&&c.Manager_Selected_Planting_Date); if(selIso && selIso<=today) return selIso;
   const all=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1);
   const done=all.filter(s=>String(s.Status||'').toUpperCase()==='COMPLETED');
   done.sort((a,b)=>new Date(b.End_Time||b.Start_Time||0)-new Date(a.End_Time||a.Start_Time||0));
@@ -1071,7 +1071,8 @@ function renderPending(){
   h += `<div class="sub-h">Plantings to verify (${PV.plant.length})</div>`;
   h += PV.plant.length ? `<div class="card-row">`+PV.plant.map(c=>`
       <div class="item-card"><div class="left"><b>${esc(c.Location_ID)} · ${esc(c.Crop_Name||c.Crop_ID)}</b><div class="meta">${pvSelMeta(c, iso)}</div></div>
-        <div style="display:flex;gap:6px;align-items:center;"><input class="inline-in" type="date" id="dob_${attr(c.Cohort_ID)}" value="${plantingDefaultIso(c, '')}" max="${iso}" oninput="this.dataset.touched='1'">
+        <div style="display:flex;gap:6px;align-items:center;"><input class="inline-in" type="date" id="dob_${attr(c.Cohort_ID)}" value="${plantingDefaultIso(c, '')}" aria-label="Actual planting date" title="Actual planting date" oninput="this.dataset.touched='1'">
+        <input class="inline-in" type="date" id="vd_${attr(c.Cohort_ID)}" aria-label="Verification date (blank = planting date)" title="Verification date. Blank = the actual planting date. Any date on or after it.">
         <button class="btn" data-c="${attr(c.Cohort_ID)}" onclick="pvPlant(this.dataset.c)">Verify planting</button></div></div>`).join('')+`</div>`
     : `<div class="empty">None. A cohort appears here once its assignment is approved.</div>`;
 
@@ -1152,13 +1153,17 @@ async function pvPlant(cohortId){
   if(needAuth() || PV.busy) return;
   const el=$('dob_'+cohortId), dob=el&&el.value; if(!dob){ alert('Choose the planting date.'); return; }
   /* Compare with the date the manager selected at assignment, so the manager decides with the reference in front of them. */
-  const co=((DATA&&DATA.COHORT_PRODUCTION)||[]).find(x=>x.Cohort_ID===cohortId), sel=(PV.sd&&PV.sd[cohortId]&&PV.sd[cohortId].selection&&PV.sd[cohortId].selection.selectedDate)||(co?pvDay_(co.Selected_Planting_Date):'');
+  const co=((DATA&&DATA.COHORT_PRODUCTION)||[]).find(x=>x.Cohort_ID===cohortId), sel=(PV.sd&&PV.sd[cohortId]&&PV.sd[cohortId].selection&&PV.sd[cohortId].selection.selectedDate)||(co?pvDay_(co.Manager_Selected_Planting_Date):'');
   let cmp=''; if(sel){ const n=Math.round((Date.UTC(+dob.slice(0,4),+dob.slice(5,7)-1,+dob.slice(8,10))-Date.UTC(+sel.slice(0,4),+sel.slice(5,7)-1,+sel.slice(8,10)))/864e5);
     cmp='\n\nYou selected '+sel+' when you assigned this planting. '+(n?'This date is '+Math.abs(n)+' day'+(Math.abs(n)===1?'':'s')+(n>0?' after':' before')+' it.':'This date matches it.'); }
   if(!confirm('Verify planting of '+cohortId+' on '+dob+'? This starts the crop clock and irrigation schedule.'+cmp)) return;
-  let windowReason='', devReason='', askedWin=false, askedDev=false;
-  for(let i=0;i<5;i++){
+  const ve=$('vd_'+cohortId), vdate=(ve&&ve.value)||'';
+  if(vdate && vdate<dob){ alert('The verification date cannot be before the actual planting date ('+dob+').'); return; }
+  let windowReason='', devReason='', ovReason='', askedWin=false, askedDev=false, askedOv=false;
+  for(let i=0;i<6;i++){
     const body={cohortId, actualDob:dob};
+    if(vdate) body.verificationDate=vdate;
+    if(ovReason) body.overrideReason=ovReason;
     if(windowReason) body.windowOverrideReason=windowReason;
     if(devReason) body.deviationReason=devReason;
     let res=null, err=null;
@@ -1169,13 +1174,17 @@ async function pvPlant(cohortId){
       try{ await pvRefresh(); }catch(e){}
       pvSetBusy(false);
       const dv=res&&res.plantingDeviation, h=dv&&dv.harvest;
-      let m='Verification completed \u2014 planting of '+cohortId+' verified on '+dob+'.';
+      let m='Verification completed \u2014 planting of '+cohortId+' verified on '+dob+(vdate?' (verification date '+vdate+')':'')+'.'+((res&&res.overridden&&res.overridden.length)?' A manager override was recorded under your name.':'');
       if(dv&&h) m+=' Harvest window moved '+(h.shiftDays>0?'+':'')+h.shiftDays+' day'+(Math.abs(h.shiftDays)===1?'':'s')+' ('+h.earliest+' \u2192 '+h.latest+').';
       if(res&&res.plantingDeviationWarning) m+=' '+res.plantingDeviationWarning;
       pvProgress('ok', m, 9000); $('syncLabel').textContent=m; return;
     }
     pvSetBusy(false); pvProgress('', '');
     const code=String(err.code||''), msg=String(err.message||'');
+    if((code==='FUTURE_ACTUAL_DOB'||code==='PLANTING_ACTIVITY_NOT_DONE') && !askedOv){
+      const r=await pvAskReason(msg+'\n\nYou can override this rule. Explain why, in your own words:'); if(r===null){ $('syncLabel').textContent='Verification cancelled'; return; }
+      ovReason=r; askedOv=true; continue;
+    }
     const needDev = code==='DEVIATION_REASON_REQUIRED';
     const needWin = !needDev && /allowable|planting window|accept this planting date/i.test(msg);
     if((needDev && !askedDev) || (needWin && !askedWin)){
