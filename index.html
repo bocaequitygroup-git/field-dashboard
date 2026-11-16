@@ -1064,9 +1064,9 @@ function renderPending(){
   else h += `<div class="bar"><button class="btn secondary" onclick="pvAll(true)">Select all</button><button class="btn secondary" onclick="pvAll(false)">Clear</button>
       <button class="btn" id="pvGo" ${nSel?'':'disabled'} onclick="pvVerify()">${nSel?'Verify selected ('+nSel+')':'Verify selected'}</button></div>`
     + acts.map(x=>{ const i=actInfo(x.step.name);
-      return `<div class="vrow"><input type="checkbox" ${PV.sel[x.key]?'checked':''} data-k="${attr(x.key)}" onchange="pvTog(this.dataset.k,this.checked)" aria-label="Select ${attr(i.label)} on bed ${attr(x.bed.id)}">
+      return `<label class="vrow" style="cursor:pointer;"><input type="checkbox" ${PV.sel[x.key]?'checked':''} data-k="${attr(x.key)}" onchange="pvTog(this.dataset.k,this.checked)" aria-label="Select ${attr(i.label)} on bed ${attr(x.bed.id)}">
         <div class="vb"><div class="t">${esc(i.label)} <span class="meta" style="font-weight:400;color:var(--muted);">Bed ${esc(x.bed.id)}</span><span class="chip-w">Waiting for your verification</span></div>
-        ${i.desc?`<div class="d">${esc(i.desc)}</div>`:''}${workLines(x.step.work)}</div></div>`; }).join('');
+        ${i.desc?`<div class="d">${esc(i.desc)}</div>`:''}${workLines(x.step.work)}</div></label>`; }).join('');
 
   h += `<div class="sub-h">Plantings to verify (${PV.plant.length})</div>`;
   h += PV.plant.length ? `<div class="card-row">`+PV.plant.map(c=>`
@@ -1124,8 +1124,7 @@ async function pvRun(fn, okMsg, workMsg){
   pvProgress('work', workMsg||'Verifying\u2026'); $('syncLabel').textContent = workMsg||'Verifying\u2026';
   let ok=false, out=null;
   try{ out = await fn(); ok=true; } catch(e){ pvProgress('err', e.message, 9000); $('syncLabel').textContent='Verification failed'; }
-  PV.sel={};
-  if(ok){ pvProgress('work','Saved. Refreshing\u2026'); }
+  if(ok){ PV.sel={}; pvProgress('work','Saved. Refreshing\u2026'); }
   try{ await pvRefresh(); }catch(e){}
   pvSetBusy(false);
   if(ok){ const m='Verification completed \u2014 '+(typeof okMsg==='function'?okMsg(out):okMsg); pvProgress('ok', m, 7000); $('syncLabel').textContent = m; }
