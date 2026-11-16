@@ -1036,19 +1036,15 @@ function plantingDefaultIso(c, fallback){
   const t=new Date(), today=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
   /* 0. The date the manager SELECTED when assigning the planting (COHORT_PRODUCTION.Manager_Selected_Planting_Date, PlantingSelection.gs) once that day has arrived.
         A selected date still ahead is never offered: the crop cannot be in the ground yet and the server refuses a future planting date. */
-  const selIso=day(c&&c.Manager_Selected_Planting_Date); if(selIso) return selIso;
-  const all=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1);
+    const all=((DATA&&DATA.FIELD_LIVE_SESSION)||[]).filter(s=>s.Cohort_ID===c.Cohort_ID && ['Transplanting','DirectSeeding','Replanting'].indexOf(s.Activity_Name)!==-1);
   const done=all.filter(s=>String(s.Status||'').toUpperCase()==='COMPLETED');
   done.sort((a,b)=>new Date(b.End_Time||b.Start_Time||0)-new Date(a.End_Time||a.Start_Time||0));
   for(const r of done){
     // The box is capped at today and the server rejects future plantings: if the scheduled date is still ahead, use the day the work was actually done.
-    const sch=day(r.Scheduled_Date), fin=day(r.End_Time)||day(r.Start_Time);
-    const d=(sch && sch<=today) ? sch : (fin || sch);
+    const d=day(r.End_Time)||day(r.Start_Time);   // the completed session's End_Time (spec)
     if(d) return d;
   }
-  const open=all.filter(s=>!/^(COMPLETED|CANCELLED|CANCELED)/.test(String(s.Status||'').toUpperCase()) && day(s.Scheduled_Date) && day(s.Scheduled_Date)<=today)
-    .map(s=>day(s.Scheduled_Date)).sort();
-  return open.length ? open[open.length-1] : fallback;
+  return fallback;
 }
 function renderPending(){
   const acts = pendingActivities(), ready = readyBeds(), signed = !!AUTH.token;
