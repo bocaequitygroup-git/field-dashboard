@@ -176,6 +176,18 @@
   #reasonDlg{max-width:420px;} #reasonDlg textarea{width:100%;min-height:80px;padding:8px;font-size:14px;font-family:inherit;background:var(--bg,#0f1511);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;}
   dialog label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;} dialog .inline-in{width:100%;padding:8px;font-size:14px;}
   .err{color:var(--danger);font-size:12px;margin-top:8px;min-height:16px;}
+  /* Zone sign-off (ACT_013): urgent, so it is red wherever it appears */
+  .zd-badge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;border-radius:999px;background:#fff;color:#b8321f;font-weight:800;font-size:11px;line-height:18px;text-align:center;}
+  .zd-badge:empty{display:none;}
+  .btn.zd-btn.alert{background:var(--danger);animation:zdPulse 1.6s infinite;}
+  .zd-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--danger);color:#fff;padding:10px 20px;font-size:13px;font-weight:600;}
+  .zd-banner[hidden]{display:none;}
+  .zd-banner .btn{background:#fff;color:#b8321f;font-weight:700;}
+  #zoneDlg{max-width:560px;width:calc(100% - 32px);}
+  .zd-card{border:1px solid var(--border);border-left:4px solid var(--danger);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--panel2);}
+  .zd-warn{background:rgba(224,165,61,.15);color:var(--warn);border-radius:6px;padding:8px 10px;margin-top:8px;font-size:12px;}
+  @keyframes zdPulse{0%{box-shadow:0 0 0 0 rgba(224,85,61,.65);}70%{box-shadow:0 0 0 9px rgba(224,85,61,0);}100%{box-shadow:0 0 0 0 rgba(224,85,61,0);}}
+  @media (prefers-reduced-motion:reduce){.btn.zd-btn.alert{animation:none;}}
   footer{padding:16px 20px;text-align:center;font-size:11px;color:var(--muted);border-top:1px solid var(--border);}
 .act-link{cursor:pointer;} .act-link:hover td{background:rgba(0,0,0,.035);}
 .kv{display:flex;justify-content:space-between;gap:12px;padding:4px 0;font-size:12.5px;border-bottom:1px solid rgba(0,0,0,.07);}
@@ -194,11 +206,13 @@
   <div class="status-block">
     <span class="sync-dot"></span>
     <span id="syncLabel">Connecting…</span>
+    <button class="btn zd-btn" id="zdBtn" type="button" onclick="zdOpen()" title="Irrigation zone traces waiting for manager sign-off">Zone sign-off<span class="zd-badge" id="zdBadge"></span></button>
     <button class="refresh-btn" id="refreshIcon" title="Refresh now" type="button"><span class="ricon">&#8635;</span></button>
     <span id="todayLabel"></span>
     <span id="authBlock"></span>
   </div>
 </header>
+<div id="zdBanner" class="zd-banner" role="alert" hidden></div>
 
 <main>
   <div class="kpi-grid">
@@ -322,6 +336,12 @@
   <label for="liPin">PIN</label><input class="inline-in" id="liPin" type="password" inputmode="numeric" autocomplete="current-password">
   <div class="err" id="liErr"></div>
   <div class="bar"><button class="btn" id="liGo" type="button">Sign in</button><button class="btn secondary" type="button" onclick="$('loginDlg').close()">Cancel</button></div>
+</dialog>
+<dialog id="zoneDlg">
+  <h2 style="font-size:15px;margin:0 0 4px;">Irrigation zone sign-off</h2>
+  <div class="meta" style="font-size:12px;color:var(--muted);line-height:1.4;">Zone traces that workers recorded with ACT_013 wait here. Signing off sets that bed&rsquo;s irrigation zone and releases the zone lock for that bed only. The worker&rsquo;s zone is preselected; change it only if you disagree. A zone already on file is never overwritten. Rejecting changes nothing.</div>
+  <div id="zoneBody" style="margin-top:12px;"></div>
+  <div class="bar"><button class="btn secondary" type="button" onclick="zdLoad()">Refresh</button><button class="btn secondary" type="button" onclick="$('zoneDlg').close()">Close</button></div>
 </dialog>
 <dialog id="profDlg" style="max-width:520px;width:calc(100% - 32px);">
   <div id="profBody"></div>
@@ -963,11 +983,109 @@ async function lbdOpen(i, fromBed){
   try { body.innerHTML = back() + lbdBudgetHtml(l) + '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">' + renderActProfile(await api('get-activity-profile', { sessionId: sid }, 30000)) + '</div>'; }
   catch (e) { body.innerHTML = back() + lbdBudgetHtml(l) + `<div class="err" style="margin-top:12px;">${esc(e.message || 'Could not load the activity profile.')}</div>`; }
 }
+
+/* ---------- Zone sign-off (ACT_013): manager queue. get-zone-trace-queue / verify-zone-trace / reject-zone-trace ----------
+ * Same rules as ranch_aab and the manager app: the zone must be IRR-Z01..IRR-Z07 (no free text), the server never overwrites a zone
+ * already on file, nothing here touches commissioning flags. Needs the manager sign-in (the queue is not public), so the button is always
+ * there but asks for sign-in first. The count is polled while signed in; the button, banner and tab title turn red when something waits. */
+const ZD_ZONES = ['IRR-Z01','IRR-Z02','IRR-Z03','IRR-Z04','IRR-Z05','IRR-Z06','IRR-Z07'];
+const ZD = { items:[], loaded:false, polling:false, last:0, drafts:{} }, ZD_TITLE0 = document.title;
+function zdDraft(id){
+  if(!ZD.drafts[id]){ const t=ZD.items.find(x=>String(x.Trace_ID)===String(id)), obs=t?String(t.Observed_Zone_Canonical||'').trim().toUpperCase():'';
+    ZD.drafts[id]={zone:ZD_ZONES.indexOf(obs)>=0?obs:'',busy:false,err:'',conflict:'',rejecting:false,reason:''}; }
+  return ZD.drafts[id];
+}
+function zdPaint(){
+  const n = AUTH.token && ZD.loaded ? ZD.items.length : 0, open = $('zoneDlg') && $('zoneDlg').open;
+  $('zdBadge').textContent = n ? String(n) : ''; $('zdBtn').classList.toggle('alert', n>0);
+  const ban = $('zdBanner'); ban.hidden = !(n>0) || open;
+  if(!ban.hidden) ban.innerHTML = '<span>⚠ '+n+' irrigation zone trace'+(n>1?'s are':' is')+' waiting for your sign-off. Irrigation on '+(n>1?'those beds is':'that bed is')+' held until you approve.</span><button class="btn" type="button" onclick="zdOpen()">Review now</button>';
+  document.title = (n?'('+n+') ':'') + ZD_TITLE0;
+}
+async function zdFetch(){ const r = await api('get-zone-trace-queue', {}, 30000); return Array.isArray(r) ? r : (r && (r.traces||r.items)) || []; }
+function zdOpen(){
+  if(!AUTH.token){ openLogin('Sign in to review zone traces.'); return; }
+  $('zoneBody').innerHTML = '<div class="meta">Loading zone traces…</div>';
+  if(!$('zoneDlg').open) $('zoneDlg').showModal();
+  zdPaint(); zdLoad();
+}
+async function zdLoad(){
+  try{ ZD.items = await zdFetch(); ZD.loaded = true; ZD.last = Date.now(); zdRender(); }
+  catch(e){ $('zoneBody').innerHTML = '<div class="err">'+esc(e.message||'Could not load the zone-trace queue.')+'</div>'; }
+  zdPaint();
+}
+function zdRender(){
+  const box = $('zoneBody'); if(!box) return;
+  if(!ZD.items.length){ box.innerHTML = '<div class="meta">No zone traces are waiting for sign-off.</div>'; return; }
+  box.innerHTML = ZD.items.map(t=>{
+    const id=String(t.Trace_ID||''), d=zdDraft(id), a=attr(id), obs=String(t.Observed_Zone_Canonical||'').trim(), raw=String(t.Observed_Zone_Raw||'').trim();
+    const when = t.Timestamp ? new Date(t.Timestamp).toLocaleString() : '', mismatch = !!(d.zone && obs && d.zone!==obs);
+    let h = '<div class="zd-card"><div style="font-weight:700;">'+esc(t.Bed_ID||'')+' <span class="meta" style="font-weight:400;">· cohort '+esc(t.Cohort_ID||'—')+'</span></div>'+
+      '<div class="meta" style="font-size:12px;">Worker '+esc(t.Worker_ID||'—')+(when?' · submitted '+esc(when):'')+'</div>'+
+      '<div class="meta" style="font-size:12px;"><b>Worker recorded:</b> '+(obs?esc(obs):raw?'“'+esc(raw)+'” (not a recognized zone)':'nothing recognized')+'</div>'+
+      (t.Line_Notes?'<div class="meta" style="font-size:12px;"><b>Line / emitter notes:</b> '+esc(t.Line_Notes)+'</div>':'');
+    if(d.conflict) h += '<div class="zd-warn"><b>Zone conflict: not signed off.</b> '+esc(d.conflict)+' Nothing was changed. Check the bed on site, then reject this trace if the recorded zone is wrong.</div>';
+    if(!d.rejecting){
+      h += '<label>Zone to sign off'+(d.zone&&d.zone===obs?' (as recorded by the worker)':'')+'</label><select class="inline-in" data-zd-zone="'+a+'"><option value="">Choose a zone…</option>'+ZD_ZONES.map(z=>'<option value="'+z+'"'+(d.zone===z?' selected':'')+'>'+z+'</option>').join('')+'</select>';
+      if(mismatch) h += '<div class="meta" style="color:var(--warn);font-size:12px;margin-top:4px;">The worker recorded '+esc(obs)+'. You are signing off '+esc(d.zone)+'.</div>';
+      if(d.err) h += '<div class="err">'+esc(d.err)+'</div>';
+      h += '<div class="bar"><button class="btn" type="button" data-zd="approve" data-id="'+a+'"'+(d.busy||!d.zone?' disabled':'')+'>'+(d.busy?'Signing off…':'Approve and sign off')+'</button><button class="btn secondary" type="button" data-zd="reject-open" data-id="'+a+'"'+(d.busy?' disabled':'')+'>Reject</button></div>';
+    } else {
+      h += '<label>Why is this trace being rejected? (required)</label><textarea class="inline-in" style="width:100%;min-height:60px;font-family:inherit;" maxlength="300" data-zd-reason="'+a+'">'+esc(d.reason)+'</textarea>';
+      if(d.err) h += '<div class="err">'+esc(d.err)+'</div>';
+      h += '<div class="bar"><button class="btn" type="button" data-zd="reject" data-id="'+a+'"'+(d.busy?' disabled':'')+'>'+(d.busy?'Rejecting…':'Confirm reject')+'</button><button class="btn secondary" type="button" data-zd="reject-cancel" data-id="'+a+'"'+(d.busy?' disabled':'')+'>Cancel</button></div>';
+    }
+    return h+'</div>';
+  }).join('');
+}
+function zdDrop(id){ ZD.items = ZD.items.filter(x=>String(x.Trace_ID)!==String(id)); delete ZD.drafts[id]; zdRender(); zdPaint(); }
+async function zdApprove(id){
+  const d=zdDraft(id), t=ZD.items.find(x=>String(x.Trace_ID)===String(id)); if(d.busy||!t) return;
+  if(ZD_ZONES.indexOf(d.zone)<0){ d.err='Choose one of IRR-Z01 to IRR-Z07.'; zdRender(); return; }
+  d.busy=true; d.err=''; d.conflict=''; zdRender();
+  try{ await api('verify-zone-trace',{traceId:id,zone:d.zone}); zdDrop(id); }
+  catch(e){ d.busy=false; if(e.code==='ALREADY_VERIFIED'||e.code==='ZONE_CONFLICT_WITH_RECORD') d.conflict=e.message||'This bed already has a zone on file.'; else d.err=e.message||'Could not sign off this trace.'; zdRender(); }
+}
+async function zdReject(id){
+  const d=zdDraft(id), reason=String(d.reason||'').trim(); if(d.busy) return;
+  if(!reason){ d.err='Enter why this trace is being rejected.'; zdRender(); return; }
+  d.busy=true; d.err=''; zdRender();
+  try{ await api('reject-zone-trace',{traceId:id,reason}); zdDrop(id); }
+  catch(e){ d.busy=false; d.err=e.message||'Could not reject this trace.'; zdRender(); }
+}
+document.addEventListener('click', e=>{
+  const b = e.target.closest && e.target.closest('[data-zd]'); if(!b) return;
+  const id=b.dataset.id, k=b.dataset.zd, d=zdDraft(id);
+  if(k==='approve') zdApprove(id);
+  else if(k==='reject-open'){ d.rejecting=true; d.reason=''; d.err=''; zdRender(); }
+  else if(k==='reject-cancel'){ d.rejecting=false; d.reason=''; d.err=''; zdRender(); }
+  else if(k==='reject') zdReject(id);
+});
+document.addEventListener('change', e=>{ const el=e.target.closest&&e.target.closest('[data-zd-zone]'); if(el){ const d=zdDraft(el.dataset.zdZone); d.zone=el.value; d.err=''; zdRender(); } });
+document.addEventListener('input', e=>{ const el=e.target.closest&&e.target.closest('[data-zd-reason]'); if(el) zdDraft(el.dataset.zdReason).reason=el.value; });
+$('zoneDlg').addEventListener('close', zdPaint);
+async function zdPoll(){
+  if(!AUTH.token || ZD.polling || document.hidden) return;
+  ZD.polling=true; ZD.last=Date.now();
+  try{
+    const list=await zdFetch(), old=ZD.items.map(t=>String(t.Trace_ID)), first=!ZD.loaded, fresh=list.filter(t=>old.indexOf(String(t.Trace_ID))<0);
+    const busy=Object.keys(ZD.drafts).some(k=>ZD.drafts[k].busy)||(document.activeElement&&/^(TEXTAREA|SELECT)$/.test(document.activeElement.tagName));
+    ZD.items=list; ZD.loaded=true;
+    if(!first&&fresh.length&&typeof pvProgress==='function') pvProgress('err','New zone trace waiting for sign-off: bed '+(fresh[0].Bed_ID||'')+(fresh.length>1?' and '+(fresh.length-1)+' more':'')+'.',9000);
+    if($('zoneDlg').open&&!busy) zdRender();
+    zdPaint();
+  }catch(e){ /* quiet: keeps the last count */ }
+  ZD.polling=false;
+}
+setInterval(()=>{ if(AUTH.token && Date.now()-ZD.last >= (ZD.loaded?15000:0)) zdPoll(); }, 3000);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) zdPoll(); });
 function renderAuth(){
   $('authBlock').innerHTML = AUTH.token
     ? `${esc(AUTH.name||AUTH.id)} · <button class="refresh-btn" onclick="signOut()">Sign out</button>`
     : `<button class="btn" onclick="openLogin()">Manager sign-in</button>`;
   renderLbDetail(); lbdLoad(false);
+  if(!AUTH.token){ ZD.items=[]; ZD.loaded=false; ZD.drafts={}; }
+  zdPaint(); zdPoll();
 }
 function openLogin(msg){ $('liErr').textContent = msg||''; $('liPin').value=''; $('loginDlg').showModal(); $('liId').focus(); }
 async function doLogin(){
