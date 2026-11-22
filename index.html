@@ -381,6 +381,8 @@ function daysBetween(a,b){
   return Math.round((B-A)/86400000);
 }
 function esc(s){ return (s===undefined||s===null) ? '' : String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+/* TRACE FIX: "ACT_018: Harvest" when the row carries its ID (rows written after the fix do); older rows show the name only. */
+function actLbl_(s){ const id=String(s.Activity_ID||'').trim(); const n=String(s.Activity_Name||'').trim(); return id ? id+': '+n : n; }
 
 // ============================================================
 // Computation layer — same logic works on the live JSON feed,
@@ -648,7 +650,7 @@ function computeAll(){
     wg += `<div class="wg-sub">Scouting completed (last 30 days)</div><div class="card-row">` + recentScout.slice(0,10).map(x => {
       const s = x.s, fs = (findingsByBed[bedKey(s.Bed_ID)] || []).filter(f => Math.abs(new Date(f.Timestamp).getTime() - x.t) < 2*DAY);
       const res = fs.length ? `<span class="wg-badge warn">${fs.length} finding${fs.length>1?'s':''}: ${esc(fs[0].Severity||'')}</span>` : `<span class="wg-badge ok">Nothing found</span>`;
-      return `<div class="item-card"><div class="left"><b>${esc(s.Bed_ID)} · ${esc(s.Activity_Name)}</b>
+      return `<div class="item-card"><div class="left"><b>${esc(s.Bed_ID)} · ${esc(actLbl_(s))}</b>
         <div class="meta">${esc(userName(s.Worker_ID))} · ${fmtDate(x.t)}</div></div>${res}</div>`; }).join('') + `</div>`;
   }
   if(scout.length){
@@ -695,7 +697,7 @@ function computeAll(){
       <tr${actLink(s)}>
         <td>${esc(userName(s.Worker_ID))}</td>
         <td>${esc(s.Bed_ID)}</td>
-        <td>${esc(s.Activity_Name||'—')}</td>
+        <td>${esc(actLbl_(s)||'—')}</td>
         <td><span class="pill ${(s.Status||'').toLowerCase()}">${esc(s.Status||'—')}</span></td>
         <td>${s.Start_Time ? fmtDate(s.Start_Time) : (s.Assigned_Time ? 'Assigned ' + fmtDate(s.Assigned_Time) : '—')}</td>
         <td>${String(s.Status||'').toUpperCase()==='COMPLETED' && s.End_Time ? esc(fmtDT(s.End_Time)) : ''}</td>
